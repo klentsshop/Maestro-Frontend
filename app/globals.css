@@ -1,0 +1,259 @@
+@import url('https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&family=Oswald:wght@500;700&display=swap');
+
+:root {
+  --primary: #B71C1C; /* Rojo Talanquera */
+  --dark: #222222;
+  --bg-gray: #f4f6f8;
+  --white: #ffffff;
+  --shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+  --border: #e0e0e0;
+}
+
+* {
+  box-sizing: border-box;
+  padding: 0;
+  margin: 0;
+}
+
+body {
+  font-family: 'Roboto', sans-serif;
+  background-color: var(--bg-gray);
+  height: 100vh;
+  overflow: hidden; /* Evita scroll en toda la página */
+}
+
+/* LAYOUT PRINCIPAL: Pantalla dividida */
+.pos-layout {
+  display: flex;
+  height: 100vh;
+  width: 100vw;
+}
+
+/* --- SECCIÓN IZQUIERDA: TICKET --- */
+.ticket-panel {
+  width: 30%; /* Ocupa el 30% de la pantalla */
+  min-width: 350px;
+  background-color: var(--white);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  box-shadow: 2px 0 10px rgba(0,0,0,0.05);
+  z-index: 10;
+}
+
+.ticket-header {
+  padding: 20px;
+  background-color: var(--dark);
+  color: var(--white);
+}
+
+.ticket-header h2 {
+  font-family: 'Oswald', sans-serif;
+  font-size: 1.5rem;
+  letter-spacing: 1px;
+}
+
+.ticket-body {
+  flex: 1;
+  overflow-y: auto; /* Scroll solo en la lista de items */
+  padding: 15px;
+}
+
+.ticket-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 0;
+  border-bottom: 1px dashed var(--border);
+}
+
+.item-info h4 { font-size: 0.95rem; margin-bottom: 4px; }
+.item-info p { font-size: 0.85rem; color: #666; }
+
+.btn-remove {
+  background: #ffebee;
+  color: #c62828;
+  border: none;
+  width: 30px; height: 30px;
+  border-radius: 50%;
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  font-weight: bold;
+}
+
+.ticket-footer {
+  padding: 20px;
+  background-color: #f9f9f9;
+  border-top: 1px solid var(--border);
+}
+
+.total-row {
+  display: flex; justify-content: space-between;
+  font-size: 1.4rem; font-weight: bold;
+  margin-bottom: 15px; color: var(--dark);
+}
+
+.btn-cobrar {
+  width: 100%;
+  padding: 15px;
+  background-color: #2e7d32; /* Verde Dinero */
+  color: white;
+  border: none;
+  border-radius: 8px;
+  font-size: 1.2rem; font-weight: bold;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+.btn-cobrar:hover { background-color: #1b5e20; }
+
+/* --- SECCIÓN DERECHA: MENÚ --- */
+.menu-panel {
+  flex: 1; /* Ocupa el resto (70%) */
+  display: flex;
+  flex-direction: column;
+  background-color: var(--bg-gray);
+  position: relative;
+}
+
+/* Categorías (Scroll horizontal tipo App) */
+/* CORRECCIÓN CATEGORÍAS: Wrap para que bajen si no caben */
+.categories-bar {
+  padding: 15px; background: white;
+  display: flex; 
+  flex-wrap: wrap; /* ¡ESTO ARREGLA QUE SE ESCONDAN! */
+  gap: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.cat-btn {
+  padding: 10px 20px;
+  border: 1px solid var(--border);
+  background: white;
+  border-radius: 50px;
+  cursor: pointer;
+  white-space: nowrap;
+  font-weight: 500;
+  transition: all 0.2s;
+}
+
+.cat-btn:hover { background-color: #f0f0f0; }
+.cat-btn.active {
+  background-color: var(--primary);
+  color: white;
+  border-color: var(--primary);
+}
+
+/* Grid de Productos */
+.products-grid {
+  flex: 1;
+  padding: 20px;
+  overflow-y: auto;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); /* Tarjetas responsivas */
+  gap: 15px;
+  align-content: start;
+}
+
+.product-card {
+  background: white;
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: var(--shadow);
+  cursor: pointer;
+  transition: transform 0.1s, box-shadow 0.1s;
+  display: flex;
+  flex-direction: column;
+  height: 140px;
+  border: 1px solid transparent;
+}
+
+.product-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 15px rgba(0,0,0,0.1);
+  border-color: var(--primary);
+}
+
+.card-top {
+  height: 60px;
+  background-color: #eee;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 2rem;
+}
+
+.card-body {
+  padding: 10px;
+  flex: 1;
+  display: flex; flex-direction: column; justify-content: space-between;
+}
+
+.card-title {
+  font-size: 0.9rem;
+  font-weight: 600;
+  line-height: 1.2;
+  color: var(--dark);
+}
+
+.card-price {
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--primary);
+  margin-top: 5px;
+}
+/* =================================================
+   IMPRESIÓN TÉRMICA - GLOBAL (NO MODULE)
+   ================================================= */
+
+/* Por defecto no se muestran */
+#ticket-print,
+#comanda-print {
+  display: none;
+}
+
+@media print {
+
+  @page {
+    size: 80mm auto;
+    margin: 0;
+  }
+
+  /* Ocultar todo */
+  body * {
+    visibility: hidden;
+  }
+
+  /* Área imprimible */
+  .seccion-impresion-termica,
+  .seccion-impresion-termica * {
+    visibility: visible;
+  }
+
+  .seccion-impresion-termica {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 80mm;
+    padding: 2mm;
+    background: white;
+    font-family: 'Courier New', monospace;
+    font-size: 13px;
+    color: black;
+  }
+
+  /* Cliente */
+  body.imprimiendo-cliente #ticket-print {
+    display: block;
+  }
+
+  body.imprimiendo-cliente #comanda-print {
+    display: none;
+  }
+
+  /* Cocina */
+  body.imprimiendo-cocina #comanda-print {
+    display: block;
+  }
+
+  body.imprimiendo-cocina #ticket-print {
+    display: none;
+  }
+}
