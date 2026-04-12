@@ -204,7 +204,7 @@ export function useOrdenHandlers({
         } catch (e) { 
             console.error("🔥 [ERROR_GUARDAR_ORDEN]:", e);
             setMensajeExito(false);
-            alert("❌ Error crítico con Sanity."); 
+            alert("Sin internet o servidor lento. Intenta de nuevo."); 
         }
     };
  
@@ -218,34 +218,28 @@ export function useOrdenHandlers({
         if (!esModoCajero) return alert("⚠️ Solo el cajero puede realizar cobros directos.");
         
         let detalleFinal = [];
-        let metodoParaConfirmar = metodoPrimario; // 👈 Esta es la que usa el confirm
+        let metodoParaConfirmar = metodoPrimario; 
         
-        // 1. Si viene del MODAL (mixto_v2)
+        // 1. Lógica de métodos (Modal y Prompt)
         if (metodoPrimario === 'mixto_v2' && args) {
             detalleFinal = [
                 { metodo: 'efectivo', monto: Number(args.efectivo || 0) },
                 { metodo: 'tarjeta', monto: Number(args.tarjeta || 0) },
                 { metodo: 'digital', monto: Number(args.digital || 0) }
             ].filter(p => p.monto > 0);
-
-            // ✅ CORRECCIÓN: Usamos metodoParaConfirmar (sin el "metodoConfirmacion" que te daba error)
             metodoParaConfirmar = "PAGO DIVIDIDO (MODAL)"; 
         }
-        // 2. Lógica de Cuenta Dividida Antigua (Prompt)
         else if (metodoPrimario === 'mixto') {
             const efectivo = Number(prompt("Monto en EFECTIVO:", "0"));
             if (isNaN(efectivo) || efectivo < 0) return alert("Monto inválido");
-            
             const tarjeta = total - efectivo;
             if (tarjeta < 0) return alert("El efectivo no puede ser mayor al total de la cuenta.");
-            
             detalleFinal = [
                 { metodo: 'efectivo', monto: efectivo },
                 { metodo: 'tarjeta', monto: tarjeta }
             ];
             metodoParaConfirmar = `MIXTO (Efe: $${efectivo.toLocaleString()} - Tarj:$${tarjeta.toLocaleString()})`;
         } else {
-            // Flujo normal: Todo a un solo método
             detalleFinal = [{ metodo: metodoPrimario, monto: total }];
             metodoParaConfirmar = metodoPrimario.toUpperCase();
         }
@@ -253,9 +247,6 @@ export function useOrdenHandlers({
         // 💰 Cálculo de Propina
         const subtotalVenta = cart.reduce((s, i) => s + (Number(i.precioNum) * i.cantidad), 0);
         const valorPropina = total > subtotalVenta ? total - subtotalVenta : 0;
-
-        // 2. Confirmación (Ahora sí usará el nombre correcto)
-        if (!confirm(`💰 ¿Confirmar cobro por $${total.toLocaleString('es-CO')} en ${metodoParaConfirmar}?`)) return;
 
         const transaccionId = dnaCobro || `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
         if (!dnaCobro) setDnaCobro(transaccionId);
@@ -289,6 +280,12 @@ export function useOrdenHandlers({
             });
 
             if (res.ok) {
+                // 🛡️ PASO 1: MATAR IDENTIDAD INMEDIATAMENTE
+                // Esto evita que si hay un re-render, el sistema crea que hay una mesa viva.
+                setOrdenActivaId(null); 
+                setOrdenMesa(null); 
+                setDnaCobro(null);
+
                 sessionStorage.setItem('ticket_preview_data', JSON.stringify({
                     productos: cart,
                     subtotal: subtotalVenta,
@@ -302,16 +299,15 @@ export function useOrdenHandlers({
                     tipoOrden: tipoOrden
                 }));
 
+                // ⏳ PASO 2: TIEMPO DE GRACIA PARA SANITY (1.2 segundos)
+                // Es el tiempo necesario para que refreshOrdenes no traiga la mesa vieja.
                 setTimeout(async () => {
-                    if (ordenActivaId) await apiEliminar(ordenActivaId);
-                    setDnaCobro(null);
-                    clearCart(); 
-                    setOrdenActivaId(null); 
-                    setOrdenMesa(null); 
+                    clearCart(); // Limpiamos el carrito al final
                     await refreshOrdenes();
                     if (rep?.cargarReporteAdmin) rep.cargarReporteAdmin();
-                    setMensajeExito(false);
-                }, 500); 
+                    setMensajeExito(false); // Liberamos el botón al final
+                }, 1200); 
+
             } else {
                 setMensajeExito(false);
                 alert("❌ Error en el servidor al procesar la venta.");
@@ -321,7 +317,6 @@ export function useOrdenHandlers({
             alert('❌ Error en el pago. Revisa la conexión.'); 
         }
     };
-
     const cancelarOrden = async () => {
         if (!ordenActivaId) return;
         if (!esModoCajero) return alert("🔒 PIN de Cajero requerido.");

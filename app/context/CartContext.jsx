@@ -227,46 +227,40 @@ export function CartProvider({ children }) {
   const itemADisminuir = items.find(i => i.lineId === lineId);
   if (!itemADisminuir) return;
 
-  const insumoId = itemADisminuir.insumoVinculado?._ref;
+  const insumoId = itemADisminuir.insumoVinculado?._ref || itemADisminuir.insumoId;
 
   if (itemADisminuir.controlaInventario && insumoId) {
-    const stockActualEnMapa = stockLocalCache.get(insumoId) || 0;
-    const unidadInsumoXPlato = Number(itemADisminuir.cantidadADescontar) || 1;
-    stockLocalCache.set(insumoId, stockActualEnMapa + unidadInsumoXPlato);
+    // 🛡️ Calculamos la cantidad exacta que gasta UNA unidad de este plato
+    const unidadARestaurar = Number(itemADisminuir.cantidadADescontar) || 1;
 
+    // 🚀 Solo disparamos la API. El caché local se actualizará 
+    // automáticamente cuando useSWR refresque o cuando confirmemos el éxito.
     fetch('/api/inventario/devolver', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ 
         items: [{ 
-          // 🚨 CAMBIO CRÍTICO: Usamos 'insumoId' para que la API lo reconozca
           insumoId: insumoId, 
-          cantidad: 1, // 1 plato
-          insumos: [{ _id: insumoId, cantidad: unidadInsumoXPlato }] // Mantenemos este por si acaso
+          cantidad: unidadARestaurar // Enviamos el valor neto a sumar
         }] 
       })
     })
-    .then(async (res) => {
+    .then(res => {
       if (res.ok) {
-        const data = await res.json();
-        if (data.nuevoStock) {
-            stockLocalCache.set(insumoId, Number(data.nuevoStock));
-        }
-        if (!data.alertaStockBajo) {
-          avisosDados.delete(insumoId);
-        }
+        // Notificamos al sistema que hubo un cambio real en la base de datos
+        window.dispatchEvent(new Event('inventarioActualizado'));
       }
     })
     .catch(err => console.error("Error al devolver stock:", err));
   }
 
-  // Lógica de UI intacta
+  // Lógica de UI: Bajamos la cantidad en pantalla
   setItems(prev => {
     const idx = prev.findIndex(i => i.lineId === lineId);
     if (idx === -1) return prev;
     const copy = [...prev];
     if (copy[idx].cantidad <= 1) {
-      copy.splice(idx, 1);
+      return prev.filter(i => i.lineId !== lineId);
     } else {
       const nuevaCant = copy[idx].cantidad - 1;
       copy[idx] = { 
@@ -274,11 +268,12 @@ export function CartProvider({ children }) {
         cantidad: nuevaCant,
         subtotalNum: nuevaCant * (copy[idx].precioNum || 0)
       };
+      return copy;
     }
-    return copy;
   });
 };
-  const clear = () => {
+
+const clear = () => {
     setItems([]);
     setPropina(0);
     setMontoManual(0);
@@ -290,32 +285,34 @@ export function CartProvider({ children }) {
     localStorage.removeItem('talanquera_tipo_orden');
   };
   const clearWithStockReturn = async () => {
-    // 1. Preparamos el paquete de datos en el formato que la API espera
+    // 1. Mapeamos los items para que lleven el cálculo YA HECHO desde el cliente
     const itemsParaDevolver = items
       .filter(it => it.controlaInventario && (it.insumoVinculado?._ref || it.insumoId))
       .map(it => ({
         insumoId: it.insumoVinculado?._ref || it.insumoId,
-        // Calculamos el total: (lo que gasta cada plato) x (cuántos platos hay)
+        // ✅ LA VERDAD: (Lo que gasta 1 plato) x (Cuántos platos hay en el carrito)
         cantidad: (Number(it.cantidadADescontar) || 1) * (Number(it.cantidad) || 1)
       }));
 
-    // 2. Si hay algo que devolver, hacemos UN SOLO viaje a la API (más rápido)
     if (itemsParaDevolver.length > 0) {
       try {
-        await fetch('/api/inventario/devolver', {
+        const res = await fetch('/api/inventario/devolver', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ 
-            items: itemsParaDevolver // 👈 Aquí está la clave: enviamos la carpeta "items"
-          })
+          body: JSON.stringify({ items: itemsParaDevolver })
         });
-        console.log("✅ Stock devuelto masivamente");
+        
+        if (res.ok) {
+           console.log("✅ Stock restaurado en Sanity");
+           // Forzamos limpieza de memoria local para evitar datos "fantasma"
+           refreshStockLocal();
+           window.dispatchEvent(new Event('inventarioActualizado'));
+        }
       } catch (e) {
-        console.error("Error devolviendo stock en limpieza profunda", e);
+        console.error("Error devolviendo stock masivo:", e);
       }
     }
     
-    // 3. Limpieza visual
     clear(); 
 };
 
@@ -334,19 +331,22 @@ const eliminarLineaConStock = async (lineId) => {
     // 3. Lógica de Inventario usando la referencia capturada
     if (itemABorrar.controlaInventario) {
         const insumoId = itemABorrar.insumoVinculado?._ref || itemABorrar.insumoId;
+        // Calculamos el total de esa línea (Ej: 3 arepas = 3 raciones de masa)
         const cantidadADevolver = (Number(itemABorrar.cantidadADescontar) || 1) * (Number(itemABorrar.cantidad) || 1);
         
         try {
             await fetch('/api/inventario/devolver', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ items: [{ insumoId, cantidad: cantidadADevolver }] })
+                body: JSON.stringify({ 
+                    items: [{ insumoId, cantidad: cantidadADevolver }] 
+                })
             });
+            window.dispatchEvent(new Event('inventarioActualizado'));
         } catch (err) {
-            console.error("❌ Error devolviendo stock:", err);
+            console.error("❌ Error devolviendo stock de línea:", err);
         }
     }
-
     // 4. Actualizamos el estado y retornamos el nuevo carrito para el Handler
     setItems(nuevoCarrito);
     return nuevoCarrito; 

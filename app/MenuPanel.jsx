@@ -178,7 +178,7 @@ const categoriasParaConfig = useMemo(() => [...new Set(platos.map(p => p.categor
                 <TicketPanel 
                     cart={cart} total={total} metodoPago={metodoPago} setMetodoPago={setMetodoPago}
                     quitarDelCarrito={quitarDelCarrito} agregarAlCarrito={agregarAlCarrito} guardarOrden={ord.guardarOrden} errorMesaOcupada={ord.errorMesaOcupada}
-                    setErrorMesaOcupada={ord.setErrorMesaOcupada}cobrarOrden={() => ord.cobrarOrden(metodoPago)}
+                    setErrorMesaOcupada={ord.setErrorMesaOcupada}cobrarOrden={ord.cobrarOrden}
                     generarCierreDia={rep.generarCierreDia} solicitarAccesoCajero={acc.solicitarAccesoCajero}
                     solicitarAccesoAdmin={acc.solicitarAccesoAdmin} registrarGasto={gst.registrarGasto}
                     refreshOrdenes={refreshOrdenes} setMostrarListaOrdenes={setMostrarListaOrdenes}

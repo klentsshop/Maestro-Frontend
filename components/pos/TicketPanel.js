@@ -686,33 +686,37 @@ export default function TicketPanel({
     </button>
     {/* 4. BOTÓN COBRAR: Solo si es cajero y la orden ya está guardada */}
 {esModoCajero && cart.length > 0 && (
-    <button 
-    onClick={() => {
-        // 1. EXTRAEMOS LOS VALORES A UNA CONSTANTE FIJA
-        const copiaMontos = {
+   <button 
+    onClick={async () => {
+        // 1. CAPTURA DE DATOS (Congelamos los montos para que no se pierdan)
+        const montosFinales = {
             efectivo: Number(montosMixtos.efectivo || 0),
             tarjeta: Number(montosMixtos.tarjeta || 0),
             digital: Number(montosMixtos.digital || 0)
         };
+
+        const sumaModal = montosFinales.efectivo + montosFinales.tarjeta + montosFinales.digital;
         
-        const sumaTotalCalculada = copiaMontos.efectivo + copiaMontos.tarjeta + copiaMontos.digital;
+        // 2. EJECUCIÓN DIRECTA
+        // No ponemos setMensajeExito aquí para evitar el error de la imagen.
+        // El bloqueo gris ocurrirá en cuanto entre a 'cobrarOrden' en el handler.
+        try {
+            if (sumaModal > 0 && Math.abs(sumaModal - total) < 10) {
+                await cobrarOrden('mixto_v2', montosFinales); 
+            } else {
+                await cobrarOrden(metodoPago);
+            }
+            
+            // 3. LIMPIEZA TRAS EL COBRO EXITOSO
+            setPagaCon('');
+            setMontosMixtos({ efectivo: 0, tarjeta: 0, digital: 0 });
 
-        // 📝 LOG DE CONTROL
-        console.log("💎 VALORES BLINDADOS PARA ENVIAR:", copiaMontos);
-
-        // 2. DECISIÓN DE COBRO
-        if (sumaTotalCalculada > 0 && Math.abs(sumaTotalCalculada - total) < 10) {
-            // USAMOS 'copiaMontos' para que no le afecte el reset de abajo
-            cobrarOrden('mixto_v2', copiaMontos); 
-        } else {
-            cobrarOrden(metodoPago);
+        } catch (error) {
+            console.error("🔥 Error crítico en el botón cobrar:", error);
+            // El catch está aquí por si el await falla antes de llegar a Sanity
         }
-        
-        // 3. LIMPIEZA (Ahora no afectará al envío porque ya usamos la copia)
-        setPagaCon('');
-        setMontosMixtos({ efectivo: 0, tarjeta: 0, digital: 0 });
-    }}
-    disabled={mensajeExito}
+    }}    
+    disabled={mensajeExito} // 👈 Este sigue siendo el candado
     style={{ 
         flex: '1', 
         padding: '12px 2px', 
@@ -721,10 +725,9 @@ export default function TicketPanel({
         fontWeight: '900', fontSize: '0.75rem', 
         cursor: mensajeExito ? 'not-allowed' : 'pointer', minWidth: '0'
     }}
-    >
-       {mensajeExito ? 'ENVIANDO...' : 'COBRAR'}
-    </button>
-)}
+>
+    {mensajeExito ? 'ENVIANDO...' : 'COBRAR'}
+</button>)}
 </div>
             </div>
         </div>

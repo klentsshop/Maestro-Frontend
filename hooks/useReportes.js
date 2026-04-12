@@ -20,7 +20,7 @@ export function useReportes(getFechaBogota) {
         porMesero: {},
         gastos: 0,
         estadisticas: {
-            metodosPago: { efectivo: 0, tarjeta: 0, transferencia: 0 },
+            metodosPago: { efectivo: 0, tarjeta: 0, digital: 0 },
             topPlatos: [],
             totalPropinas: 0
         }
@@ -29,11 +29,6 @@ export function useReportes(getFechaBogota) {
     const [fechaInicioFiltro, setFechaInicioFiltro] = useState(getFechaBogota());
     const [fechaFinFiltro, setFechaFinFiltro] = useState(getFechaBogota());
     const [pinMemoria, setPinMemoria] = useState(null);
-
-    // ================================================================
-    // 📊 1. CIERRE DE DÍA (CAJA RÁPIDA)
-    // Usamos el formato exacto que funciona en producción (T00:00:00Z)
-    // ================================================================
     // ================================================================
     // 📊 1. CIERRE DE DÍA (CAJA RÁPIDA) - VERSIÓN BLINDADA 12 PM
     // ================================================================
@@ -73,50 +68,42 @@ export function useReportes(getFechaBogota) {
             let productos = {};
             let preciosParaExcel = {};
             let metodos = { efectivo: 0, tarjeta: 0, digital: 0 };
+ventas.forEach(v => {
+    const ventaNeta = Number(v.totalPagado || 0);
+    const propina = Number(v.propinaRecaudada || 0);
 
-            ventas.forEach(v => {
-                // 1. Mantenemos tus variables de cálculo originales
-                const venta = Number(v.totalPagado || 0);
-                const propina = Number(v.propinaRecaudada || 0);
+    totalVentasNetas += ventaNeta;
+    totalPropinas += propina;
 
-                totalVentasNetas += venta;
-                totalPropinas += propina;
+    let procesado = false;
 
-                // 🛡️ LÓGICA DE MÉTODOS DE PAGO (Multimodal + Retrocompatibilidad)
-                // 🛡️ LÓGICA DE MÉTODOS DE PAGO (Blindada con Lupa y Bisturí)
-                // 🛡️ LÓGICA DE MÉTODOS DE PAGO (Versión "Venta Neta" - Sin mezclar Propinas)
-if (v.detallePagos && v.detallePagos.length > 0) {
-    // 🧠 Si es Pago Dividido: El monto ya viene repartido desde el Modal
-    v.detallePagos.forEach(p => {
-        const m = p.metodo?.toLowerCase() || 'efectivo';
-        const montoParte = Number(p.monto || 0);
-        
-        // Sumamos solo la parte de la venta
-        if (m === 'efectivo') metodos.efectivo += montoParte;
-        else if (m === 'tarjeta') metodos.tarjeta += montoParte;
-        else if (m === 'digital') metodos.digital += montoParte;
-    });
-} else {
-    // 🔄 Si es venta normal: Usamos solo el 'venta' (totalPagado), ignoramos 'propina'
-    const mp = v.metodoPago?.toLowerCase() || 'efectivo';
-    
-    // 💎 Cirugía: Aquí ya NO sumamos la propina. Solo la venta neta del producto.
-    const montoVentaNeta = venta; 
+    // 🛡️ SI HAY DETALLE DE PAGOS, MANDAN ELLOS (Ignoramos el metodoPago general)
+    if (v.detallePagos && Array.isArray(v.detallePagos) && v.detallePagos.length > 0) {
+        v.detallePagos.forEach(p => {
+            const m = p.metodo?.toLowerCase() || 'efectivo';
+            const monto = Number(p.monto || 0);
+            if (m === 'efectivo') metodos.efectivo += monto;
+            else if (m === 'tarjeta') metodos.tarjeta += monto;
+            else if (m === 'digital') metodos.digital += monto;
+        });
+        procesado = true;
+    }
 
-    if (mp === 'efectivo') metodos.efectivo += montoVentaNeta;
-    else if (mp === 'tarjeta') metodos.tarjeta += montoVentaNeta;
-    else metodos.digital += montoVentaNeta;
-}
+    // 🔄 Si no hubo detalle, usamos el método simple
+    if (!procesado) {
+        const mp = v.metodoPago?.toLowerCase() || 'efectivo';
+        if (mp === 'efectivo') metodos.efectivo += ventaNeta;
+        else if (mp === 'tarjeta') metodos.tarjeta += ventaNeta;
+        else metodos.digital += ventaNeta;
+    }
 
-                // 2. Mantenemos intacta tu lógica de conteo de productos para el Excel y Popularidad
-                v.platosVendidosV2?.forEach(p => {
-                    const nombre = p.nombrePlato || "Desconocido";
-                    productos[nombre] = (productos[nombre] || 0) + Number(p.cantidad || 0);
-                    const valorPlato = Number(p.precioUnitario || 0);
-                    preciosParaExcel[nombre] = valorPlato;
-                }); 
-            });
-
+    // Conteo de productos
+    v.platosVendidosV2?.forEach(p => {
+        const nombre = p.nombrePlato || "Desconocido";
+        productos[nombre] = (productos[nombre] || 0) + Number(p.cantidad || 0);
+        preciosParaExcel[nombre] = Number(p.precioUnitario || 0);
+    }); 
+});
             // 3. Tu lógica de gastos se mantiene igual después del loop de ventas
             const totalGastos = gastos.reduce((acc, g) => acc + Number(g.monto || 0), 0);
 
@@ -192,7 +179,7 @@ if (v.detallePagos && v.detallePagos.length > 0) {
                 // Mantenemos tus estadisticas y sus valores por defecto
                 porTipoOrden: data.porTipoOrden || { mesa: 0, domicilio: 0, llevar: 0 },
                 estadisticas: data.estadisticas || {
-                    metodosPago: { efectivo: 0, tarjeta: 0, transferencia: 0 },
+                    metodosPago: { efectivo: 0, tarjeta: 0, digital: 0 },
                     topPlatos: [],
                     totalPropinas: 0
                 }

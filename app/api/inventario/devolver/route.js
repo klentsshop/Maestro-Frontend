@@ -16,24 +16,20 @@ export async function POST(request) {
         let hayCambios = false;
 
         for (const item of items) {
-            // 1. Identificar el ID de forma estricta
-            const insumoId = item.insumoId || (item.insumos && item.insumos[0]?._id);
+            // 1. Identificar el ID de forma estricta (Priorizamos insumoId directo)
+            // Ya no buscamos en sub-arrays complejos para evitar confusiones de identidad
+            const insumoId = item.insumoId;
             
             if (!insumoId || insumoId === 'undefined') {
                 console.warn("⚠️ Intento de devolución ignorado: ID de insumo no válido.");
                 continue; 
             }
 
-            // 2. Cálculo SEGURO (Sin inventar unidades)
-            // Si no viene cantidad, es 0. No 1.
-            const cantPlatos = Number(item.cantidad) || 0;
-            
-            // Si viene de 'decrease' (botón menos), el item ya trae la cantidad total a devolver
-            // Si viene de 'limpieza masiva', calculamos platos * insumo
-            const cantInsumo = item.insumos ? (Number(item.insumos[0]?.cantidad) || 1) : 1;
-            
-            // Si cantPlatos es 0, no devolvemos nada para evitar inflar stock
-            const totalARecuperar = cantPlatos * cantInsumo;
+            // 2. Cálculo SEGURO (Suma Simple)
+            // 🚀 ELIMINAMOS LA MULTIPLICACIÓN: 
+            // El Frontend (CartContext) ya nos envía la cantidad neta a devolver.
+            // Si el POS dice que devuelva 5, sumamos 5. Si dice 1, sumamos 1.
+            const totalARecuperar = Number(item.cantidad) || 0;
 
             if (totalARecuperar > 0) {
                 hayCambios = true;
@@ -41,17 +37,24 @@ export async function POST(request) {
                     setIfMissing: { stockActual: 0 },
                     inc: { stockActual: totalARecuperar }
                 });
+                console.log(`📝 Preparando devolución: ${insumoId} +${totalARecuperar}`);
             }
         }
 
         if (hayCambios) {
+            // 3. Commit atómico: Todo se guarda o nada se guarda
             await transaction.commit();
-            console.log("✅ Devolución de stock procesada con éxito.");
+            console.log("✅ Sanity: Devolución de stock procesada con éxito.");
+        } else {
+            console.warn("ℹ️ No se procesaron cambios: Ningún item tenía cantidad válida.");
         }
 
         return NextResponse.json({ success: true });
     } catch (error) {
         console.error('❌ ERROR_DEVOLVER_ROUTE:', error.message);
-        return NextResponse.json({ error: error.message }, { status: 500 });
+        return NextResponse.json({ 
+            error: 'Error interno al devolver stock',
+            details: error.message 
+        }, { status: 500 });
     }
 }

@@ -52,10 +52,9 @@ export async function POST(req) {
         }));
 
         const abrirCajon = metodoPago === 'efectivo';
-
-       const detallePagosValido = (Array.isArray(payload.detallePagos) && payload.detallePagos.length > 0) 
-            ? payload.detallePagos 
-            : [{ metodo: metodoPago, monto: totalPagado + propinaRecaudada }];
+const detallePagosValido = (Array.isArray(payload.detallePagos) && payload.detallePagos.length > 0) 
+    ? payload.detallePagos 
+    : [{ metodo: metodoPagoRaw, monto: totalPagado + propinaRecaudada }];
 
         // ============================
         // TRANSACCIÓN ATÓMICA ÚNICA
@@ -64,25 +63,25 @@ export async function POST(req) {
 
         // 1. Crear Venta (Reporte)
         transaction = transaction.createIfNotExists({
-            _id: ventaId,
-            _type: 'venta',
-            folio: folioGenerado,
-            mesa,
-            mesero,
-            tipoOrden,
-            metodoPago: detallePagosValido.length > 1 ? 'mixto_v2' : metodoPago,
-            detallePagos: detallePagosValido.map(p => ({
-                _key: crypto.randomUUID(),
-                metodo: String(p.metodo || 'efectivo'),
-                monto: Number(p.monto || 0)
-            })),
-            totalPagado,
-            propinaRecaudada,
-            fecha: fechaUTC,
-            fechaLocal: fechaLocal,
-            platosVendidosV2: platosVenta,
-        });
-
+    _id: ventaId,
+    _type: 'venta',
+    folio: folioGenerado,
+    mesa,
+    mesero,
+    tipoOrden,
+    // 🛡️ BLINDAJE: Si el método es mixto_v2 o el array tiene más de 1 item, es mixto.
+    metodoPago: (metodoPago === 'mixto_v2' || detallePagosValido.length > 1) ? 'mixto_v2' : metodoPago,
+    detallePagos: detallePagosValido.map(p => ({
+        _key: crypto.randomUUID(),
+        metodo: String(p.metodo || 'efectivo').toLowerCase().trim(), // Normalizamos para el reporte
+        monto: Number(p.monto || 0)
+    })),
+    totalPagado,
+    propinaRecaudada,
+    fecha: fechaUTC,
+    fechaLocal: fechaLocal,
+    platosVendidosV2: platosVenta,
+});
         // 2. Crear Ticket para APK (Impresión)
         transaction = transaction.create({
             _type: 'ticketCobro',
