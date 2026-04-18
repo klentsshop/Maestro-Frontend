@@ -132,40 +132,59 @@ export default function TicketPreviewPage() {
                 marginTop: '5px' 
             }}>
                 <thead>
-                    <tr style={{ borderBottom: '1px solid #000' }}>
-                        {/* Ancho fijo para cantidad */}
-                        <th style={{ textAlign: 'left', width: '35px', padding: '5px 0' }}>CANT</th>
-                        {/* El producto toma el resto del espacio */}
-                        <th style={{ textAlign: 'left' }}>PRODUCTO</th>
-                        {/* Ancho fijo para el precio total por línea */}
-                        <th style={{ textAlign: 'right', width: '85px' }}>TOTAL</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {data.productos.map((item, index) => (
-                        <tr key={index} style={{ borderBottom: '0.5px solid #eee' }}>
-                            <td style={{ padding: '6px 0', verticalAlign: 'top' }}>
-                                {item.cantidad}
-                            </td>
-                            <td style={{ 
-                                padding: '6px 0', 
-                                wordBreak: 'break-word', // 🛡️ Si el nombre es muy largo, salta de línea sin romper la tabla
-                                paddingRight: '5px' 
-                            }}>
-                                {item.nombre.toUpperCase()}
-                            </td>
-                            <td style={{ 
-                                textAlign: 'right', 
-                                verticalAlign: 'top', 
-                                fontWeight: 'bold',
-                                padding: '6px 0' 
-                            }}>
-                                ${(item.precioNum * item.cantidad).toLocaleString()}
-                            </td>
-                        </tr>
-                    ))}
-                </tbody>
-            </table>
+        <tr style={{ borderBottom: '1px solid #000' }}>
+            <th style={{ textAlign: 'left', width: '35px', padding: '5px 0' }}>CANT</th>
+            <th style={{ textAlign: 'left' }}>PRODUCTO</th>
+            <th style={{ textAlign: 'right', width: '85px' }}>TOTAL</th>
+        </tr>
+    </thead>
+    <tbody>
+        {(() => {
+            // 🧠 AGRUPACIÓN POR IDENTIDAD (Nombre + Precio)
+            const productosAgrupados = data.productos.reduce((acc, current) => {
+                // Creamos una llave única para que si el mismo producto tiene dos precios distintos (raro, pero posible), no los mezcle
+                const llave = `${current.nombre.trim().toUpperCase()}-${current.precioNum}`;
+                
+                if (acc[llave]) {
+                    acc[llave].cantidad += current.cantidad;
+                } else {
+                    acc[llave] = { ...current };
+                }
+                return acc;
+            }, {});
+
+            // Convertimos el objeto de vuelta a un array para el map
+            return Object.values(productosAgrupados).map((item, index) => (
+                <tr key={index} style={{ borderBottom: '0.5px solid #eee' }}>
+                    <td style={{ padding: '6px 0', verticalAlign: 'top' }}>
+                        {item.cantidad}
+                    </td>
+                    <td style={{ 
+                        padding: '6px 0', 
+                        wordBreak: 'break-word',
+                        paddingRight: '5px' 
+                    }}>
+                        {item.nombre.toUpperCase()}
+                        {/* 💡 Tip Senior: Si quieres que el cliente sepa el unitario cuando es más de uno */}
+                        {item.cantidad > 1 && (
+                            <div style={{ fontSize: '0.7rem', color: '#666' }}>
+                                (UNID: ${item.precioNum.toLocaleString()})
+                            </div>
+                        )}
+                    </td>
+                    <td style={{ 
+                        textAlign: 'right', 
+                        verticalAlign: 'top', 
+                        fontWeight: 'bold',
+                        padding: '6px 0' 
+                    }}>
+                        ${(item.precioNum * item.cantidad).toLocaleString()}
+                    </td>
+                </tr>
+            ));
+        })()}
+    </tbody>
+</table>
 
             <hr style={{ border: 'none', borderTop: '1px dashed #000', marginTop: '10px' }} />
 {/* 💰 SECCIÓN DE TOTALES BLINDADA Y ALINEADA */}
@@ -200,6 +219,7 @@ export default function TicketPreviewPage() {
                     </span>
                 </div>
             </div>
+
 
             <p style={{ textAlign: 'center', marginTop: '20px', fontSize: '0.8rem' }}>
                 ¡Gracias por su visita!
