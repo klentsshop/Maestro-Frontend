@@ -21,11 +21,10 @@ export function useOrdenHandlers({
     cart, total, clearCart, clearWithStockReturn, setCartFromOrden,eliminarLineaConStock, 
     apiGuardar, apiEliminar, refreshOrdenes,
     ordenesActivas, esModoCajero, setMostrarCarritoMobile,
-    nombreMesero, setNombreMesero,tipoOrden,
-    rep, validarPinAdmin
+    nombreMesero, setNombreMesero,tipoOrden, ordenMesa, setOrdenMesa,
+    rep, validarPinAdmin, ordenActivaId, setOrdenActivaId
 }) {
-    const [ordenActivaId, setOrdenActivaId] = useState(null);
-    const [ordenMesa, setOrdenMesa] = useState(null);
+  
     const [mensajeExito, setMensajeExito] = useState(false);
     const [errorMesaOcupada, setErrorMesaOcupada] = useState(null);
     // 🧬 DNA de Cobro: Mantiene el ID idéntico en reintentos por lag
@@ -76,6 +75,7 @@ export function useOrdenHandlers({
                         
                         // 3. Flags de impresión y estado
                         seImprime: p.seImprime === true, 
+                        esDeOrdenGuardada: true
                     }));
 
                     // Enviamos al carrito con el tipo de orden recuperado de Sanity
@@ -171,6 +171,7 @@ export function useOrdenHandlers({
             categoria: (i.categoria || i.categoriaPlato || i.nombreCategoria || "").toString().trim().toUpperCase(),
             seImprime: i.seImprime === true,
             controlaInventario: i.controlaInventario || false,
+            recetaInsumos: i.recetaInsumos || [],
             insumoVinculado: i.insumoVinculado || null,
             cantidadADescontar: i.cantidadADescontar || 0
         }));
@@ -217,6 +218,23 @@ export function useOrdenHandlers({
         if (cart.length === 0) return alert("⚠️ El carrito está vacío.");
         if (!esModoCajero) return alert("⚠️ Solo el cajero puede realizar cobros directos.");
         
+        // 🛵 1. CAPTURA DE DATOS DE DOMICILIO (Si aplica)
+    let datosEntrega = null;
+    if (tipoOrden === 'domicilio') {
+        const nombre = prompt("Nombre del Cliente (Domicilio):", "");
+        const direccion = prompt("Dirección de Entrega:", "");
+        const telefono = prompt("Teléfono de Contacto:", "");
+        
+        // Solo creamos el objeto si el cajero llenó al menos la dirección
+        if (nombre || direccion || telefono) {
+            datosEntrega = {
+                nombreCliente: nombre || "N/A",
+                direccion: direccion || "N/A",
+                telefono: telefono || "N/A"
+            };
+        }
+    }
+
         let detalleFinal = [];
         let metodoParaConfirmar = metodoPrimario; 
         
@@ -261,6 +279,7 @@ export function useOrdenHandlers({
                 body: JSON.stringify({ 
                     mesa: ordenMesa || "0", 
                     tipoOrden: tipoOrden || "mesa",
+                    datosEntrega,
                     mesero: nombreMesero || "Caja", 
                     metodoPago: metodoPrimario,
                     detallePagos: detalleFinal,
@@ -296,7 +315,8 @@ export function useOrdenHandlers({
                     mesa: ordenMesa || "0",
                     mesero: nombreMesero || "Caja",
                     fecha: fechaLocal,
-                    tipoOrden: tipoOrden
+                    tipoOrden: tipoOrden,
+                    datosEntrega
                 }));
 
                 // ⏳ PASO 2: TIEMPO DE GRACIA PARA SANITY (1.2 segundos)
@@ -374,6 +394,8 @@ const sincronizarBorradoEnSanity = async (carritoFiltrado) => {
             categoria: (i.categoria || "").toString().trim().toUpperCase(),
             seImprime: i.seImprime === true,
             controlaInventario: i.controlaInventario || false,
+            esDeOrdenGuardada: true,
+            recetaInsumos: i.recetaInsumos || [],
             insumoVinculado: i.insumoVinculado || null,
             cantidadADescontar: Number(i.cantidadADescontar || 0)
         }));

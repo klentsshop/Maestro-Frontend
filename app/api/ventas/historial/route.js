@@ -30,7 +30,9 @@ export async function POST(request) {
             totalPagado,
             propinaRecaudada,
             fechaLocal,
-            platosVendidosV2
+            platosVendidosV2,
+            tipoOrden,
+            datosEntrega
         }`;
 
         const ventasRaw = await sanityClientServer.fetch(query, { inicio, fin }, { useCdn: false });

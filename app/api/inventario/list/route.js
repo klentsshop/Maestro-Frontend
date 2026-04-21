@@ -7,7 +7,7 @@ export const revalidate = 0;
 
 export async function GET() {
     try {
-        const query = `*[_type == "inventario"] | order(nombre asc) {
+        const query = `*[_type == "inventario"] | order(nombre asc){
             _id,
             nombre,
             stockActual,

@@ -16,6 +16,8 @@ export async function POST(req) {
             _type: 'ticketCobro', 
             mesa: `${venta.mesa}`,
             mesero: venta.mesero,
+            tipoOrden: venta.tipoOrden || 'mesa', // 🚀 BISTURÍ: Pasamos el tipo
+            datosEntrega: venta.datosEntrega || null,
             metodoPago: venta.metodoPago || "Efectivo",
             platosOrdenados: (venta.platosVendidosV2 || []).map(p => ({
                 _key: Math.random().toString(36).substring(2, 9),

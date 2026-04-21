@@ -31,7 +31,8 @@ export async function GET(request, { params }) {
         comentario,
         controlaInventario,
         cantidadADescontar,
-        insumoVinculado
+        insumoVinculado,
+        recetaInsumos
     }
 }`;
         

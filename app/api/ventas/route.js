@@ -8,7 +8,7 @@ export const revalidate = 0;
 export async function POST(req) {
     try {
         const payload = await req.json();
-        const { transaccionId } = payload;
+        const { transaccionId, datosEntrega } = payload;
         
         // --- VARIABLES ORIGINALES ---
         const mesa = payload.mesa || 'General';
@@ -18,29 +18,37 @@ export async function POST(req) {
         const totalPagado = Number(payload.totalPagado) || 0;
         const propinaRecaudada = Number(payload.propinaRecaudada) || 0;
         const ordenId = payload.ordenId;
-        const tipoOrden = typeof payload.tipoOrden === 'string' 
-    ? payload.tipoOrden.trim() 
-    : 'mesa';
-        // --- FECHAS Y FOLIO (Lógica original preservada) ---
+        const tipoOrden = typeof payload.tipoOrden === 'string' ? payload.tipoOrden.trim() : 'mesa';
+
+        // --- FECHAS Y FOLIO ---
         const now = new Date();
         const fechaUTC = now.toISOString();
-        const fechaLocal = new Date().toLocaleString('sv-SE', { 
-            timeZone: 'America/Bogota' 
-        });
+        const fechaLocal = new Date().toLocaleString('sv-SE', { timeZone: 'America/Bogota' });
 
         const datePart = fechaUTC.slice(2, 10).replace(/-/g, '');
         const seed = transaccionId ? transaccionId.slice(-4).toUpperCase() : (crypto.randomBytes(2).toString('hex')).toUpperCase();
         const folioGenerado = `TAL-${datePart}-${seed}`;
         const ventaId = transaccionId ? `venta-${transaccionId}` : `venta-${Date.now()}`;
-        // --- BÚSQUEDA DE IDS PARA POPULARIDAD (Garantía de ID real) ---
+
+        // --- 🚀 BÚSQUEDA DE IDS Y RECETAS ---
         const nombresPlatos = (payload.platosVendidosV2 || []).map(item => item.nombrePlato || item.nombre);
         const mapeoSanity = await sanityClientServer.fetch(
-            `*[_type == "plato" && nombre in $nombres]{nombre, _id}`,
+            `*[_type == "plato" && nombre in $nombres]{
+                nombre, 
+                _id, 
+                controlaInventario,
+                insumoVinculado,
+                cantidadADescontar,
+                recetaInsumos[]{
+                    "insumoId": insumo._ref,
+                    cantidad
+                }
+            }`,
             { nombres: nombresPlatos },
             { useCdn: false }
         );
 
-        // --- MAPEO DE PLATOS (Campos idénticos al original) ---
+        // --- MAPEO DE PLATOS ---
         const platosVenta = (payload.platosVendidosV2 || []).map(item => ({
             _key: crypto.randomUUID(),
             _type: 'platoVendidoV2',
@@ -52,41 +60,44 @@ export async function POST(req) {
         }));
 
         const abrirCajon = metodoPago === 'efectivo';
-const detallePagosValido = (Array.isArray(payload.detallePagos) && payload.detallePagos.length > 0) 
-    ? payload.detallePagos 
-    : [{ metodo: metodoPagoRaw, monto: totalPagado + propinaRecaudada }];
+        const detallePagosValido = (Array.isArray(payload.detallePagos) && payload.detallePagos.length > 0) 
+            ? payload.detallePagos 
+            : [{ metodo: metodoPagoRaw, monto: totalPagado + propinaRecaudada }];
 
         // ============================
         // TRANSACCIÓN ATÓMICA ÚNICA
         // ============================
         let transaction = sanityClientServer.transaction();
 
-        // 1. Crear Venta (Reporte)
+        // 1. Crear Venta
         transaction = transaction.createIfNotExists({
-    _id: ventaId,
-    _type: 'venta',
-    folio: folioGenerado,
-    mesa,
-    mesero,
-    tipoOrden,
-    // 🛡️ BLINDAJE: Si el método es mixto_v2 o el array tiene más de 1 item, es mixto.
-    metodoPago: (metodoPago === 'mixto_v2' || detallePagosValido.length > 1) ? 'mixto_v2' : metodoPago,
-    detallePagos: detallePagosValido.map(p => ({
-        _key: crypto.randomUUID(),
-        metodo: String(p.metodo || 'efectivo').toLowerCase().trim(), // Normalizamos para el reporte
-        monto: Number(p.monto || 0)
-    })),
-    totalPagado,
-    propinaRecaudada,
-    fecha: fechaUTC,
-    fechaLocal: fechaLocal,
-    platosVendidosV2: platosVenta,
-});
-        // 2. Crear Ticket para APK (Impresión)
+            _id: ventaId,
+            _type: 'venta',
+            folio: folioGenerado,
+            mesa,
+            mesero,
+            tipoOrden,
+            datosEntrega: datosEntrega || null,
+            metodoPago: (metodoPago === 'mixto_v2' || detallePagosValido.length > 1) ? 'mixto_v2' : metodoPago,
+            detallePagos: detallePagosValido.map(p => ({
+                _key: crypto.randomUUID(),
+                metodo: String(p.metodo || 'efectivo').toLowerCase().trim(),
+                monto: Number(p.monto || 0)
+            })),
+            totalPagado,
+            propinaRecaudada,
+            fecha: fechaUTC,
+            fechaLocal: fechaLocal,
+            platosVendidosV2: platosVenta,
+        });
+
+        // 2. Crear Ticket para APK
         transaction = transaction.create({
             _type: 'ticketCobro',
             mesa,
             mesero,
+            tipoOrden,
+            datosEntrega: datosEntrega || null,
             metodoPago: detallePagosValido.length > 1 ? 'múltiple' : metodoPago,
             items: platosVenta.map(p => ({
                 _key: crypto.randomUUID(),
@@ -100,7 +111,7 @@ const detallePagosValido = (Array.isArray(payload.detallePagos) && payload.detal
             total: totalPagado + propinaRecaudada,
             abrirCajon,
             impreso: false,
-            imprimirSolicitada: true,
+            imprimirSolicitada: false,
             fecha: fechaUTC
         });
 
@@ -109,33 +120,36 @@ const detallePagosValido = (Array.isArray(payload.detallePagos) && payload.detal
             transaction = transaction.delete(ordenId);
         }
 
-        // 4. 🔥 POPULARIDAD (Centralizada aquí para evitar duplicados)
+        // 4. 🔥 POPULARIDAD E INVENTARIO (Fusión Blindada)
         (payload.platosVendidosV2 || []).forEach(p => {
             const nombrePlato = p.nombrePlato || p.nombre;
             const match = mapeoSanity.find(m => m.nombre === nombrePlato);
-            // Si no hay ID real por nombre, intentamos el ID del payload (si es válido)
             const realId = match ? match._id : (p._id && !p._id.includes(' ') ? p._id : null);
 
             if (realId && realId.length > 5) {
+                // A. Popularidad
                 transaction = transaction.patch(realId, {
                     setIfMissing: { totalVentas: 0 },
                     inc: { totalVentas: Number(p.cantidad) || 1 }
                 });
+
             }
         });
-        
-        // para evitar que un reintento cree una venta vacía.
-       if (ordenId) {
-       const mesaExiste = await sanityClientServer.fetch(`defined(*[_type == "ordenActiva" && _id == $id][0])`, { id: ordenId });
-       if (!mesaExiste) {
-        return NextResponse.json({ ok: true, message: 'Esta venta ya fue procesada anteriormente.' }, { status: 200 });
-         }
+
+        // 🛡️ SEGURIDAD FINAL: Evitar duplicados por reintento
+        if (ordenId) {
+            const mesaExiste = await sanityClientServer.fetch(`defined(*[_type == "ordenActiva" && _id == $id][0])`, { id: ordenId });
+            if (!mesaExiste) {
+                return NextResponse.json({ ok: true, message: 'Venta ya procesada anteriormente.' }, { status: 200 });
+            }
         }
+
+        // 🚀 EL MOMENTO DE LA VERDAD
         await transaction.commit();
 
         return NextResponse.json({ 
             ok: true, 
-            message: 'Venta registrada, popularidad actualizada y mesa liberada',
+            message: 'Venta registrada e Inventario actualizado',
             folio: folioGenerado
         }, { status: 201 });
 

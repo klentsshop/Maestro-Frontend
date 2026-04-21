@@ -34,7 +34,8 @@ export async function POST(request) {
                     seImprime,
                     controlaInventario,
                     cantidadADescontar,
-                    insumoVinculado 
+                    insumoVinculado,
+                    recetaInsumos
                 }
             }
         `;

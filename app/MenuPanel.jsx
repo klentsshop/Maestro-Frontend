@@ -32,7 +32,8 @@ export default function MenuPanel() {
     const { 
         items: cart, total, addProduct: agregarAlCarrito, decrease: quitarDelCarrito, 
         metodoPago, setMetodoPago, setCartFromOrden, clear: clearCart, clearWithStockReturn, 
-         eliminarLineaConStock, actualizarComentario, propina, setPropina, montoManual, setMontoManual 
+         eliminarLineaConStock, actualizarComentario, propina, setPropina, montoManual, setMontoManual,
+         ordenActivaId, setOrdenActivaId, ordenMesa, setOrdenMesa
     } = useCart();
 
     const { 
@@ -83,7 +84,8 @@ export default function MenuPanel() {
     const { tipoOrden } = useCart();
     const ord = useOrdenHandlers({
         cart, total, clearCart, clearWithStockReturn, setCartFromOrden, eliminarLineaConStock, apiGuardar, apiEliminar, 
-        refreshOrdenes, ordenesActivas, esModoCajero: acc.esModoCajero, 
+        refreshOrdenes, ordenActivaId,setOrdenMesa, ordenMesa,
+    setOrdenActivaId, ordenesActivas, esModoCajero: acc.esModoCajero, 
         setMostrarCarritoMobile, nombreMesero, setNombreMesero, tipoOrden, validarPinAdmin: acc.validarPinAdmin,
     });
 
@@ -134,16 +136,38 @@ export default function MenuPanel() {
     }, []);
 
     // 2. ⚡ LUPA SENIOR: Escuchador para cambios de inventario instantáneos
+    // 2. ⚡ LUPA SENIOR: Sincronización de Mesas y Stock
     useEffect(() => {
-        const manejarCambioInventario = () => {
-            console.log("🔄 MenuPanel: Refrescando platos por cambio en stock...");
+        const manejarCambioInventario = async () => {
+            console.log("🔄 Verificando stock e integridad de mesa...");
+            
+            // 🛡️ Si tenemos una mesa abierta, verificamos si el cajero ya la mató
+            if (ord.ordenActivaId) {
+                try {
+                    const res = await fetch('/api/ordenes/get', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ ordenId: ord.ordenActivaId })
+                    });
+                    const data = await res.json();
+
+                    if (!data.exists) {
+                        console.warn("🚫 Mesa cobrada por otro usuario. Limpiando pantalla...");
+                        // Limpiamos localStorage ANTES para que no reviva
+                        localStorage.removeItem('talanquera_cart');
+                        clearCart(); 
+                        ord.setOrdenActivaId(null);
+                        ord.setOrdenMesa(null);
+                    }
+                } catch (e) { console.error("Error validando mesa:", e); }
+            }
+            
             cargarMenuYMeseros();
         };
 
         window.addEventListener('inventarioActualizado', manejarCambioInventario);
         return () => window.removeEventListener('inventarioActualizado', manejarCambioInventario);
-    }, []);
-
+    }, [ord.ordenActivaId]); 
     const platosFiltradosFinal = React.useMemo(() => {
     return platos.filter(p => {
         const nombre = p.nombrePlato || p.nombre || "";

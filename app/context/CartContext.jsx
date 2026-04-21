@@ -13,8 +13,9 @@ export function CartProvider({ children }) {
   const [propina, setPropina] = useState(0); // 👈 Estado para el % de propina
   const [montoManual, setMontoManual] = useState(0); // 👈 Campo "Otro" (Monto manual)
   const [tipoOrden, setTipoOrden] = useState('mesa');
-  // 💾 1. Al iniciar, recuperar del navegador si existe algo (Ahora localStorage)
-  // 💾 1. Al iniciar: Recuperar Carrito y Tipo de Orden del navegador
+  const [ordenActivaId, setOrdenActivaId] = useState(null);
+  const [ordenMesa, setOrdenMesa] = useState(null);
+   // 💾 1. Al iniciar: Recuperar Carrito y Tipo de Orden del navegador
   useEffect(() => {
     // Definimos las constantes extrayendo los datos del almacenamiento
     const savedItems = localStorage.getItem('talanquera_cart');
@@ -51,48 +52,42 @@ export function CartProvider({ children }) {
     return () => window.removeEventListener('storage', syncTabs);
   }, []);
 
-  // 💾 2. Guardado Automático: Cada vez que cambien los items o el tipo de orden
-  // 💾 2. Guardado Automático con "Amortiguador" (Debounce)
+    // 💾 2. Guardado Automático con "Amortiguador" (Debounce)
   // Esto evita que el sistema titile al cargar una mesa desde Sanity
+// 💾 2. Guardado Automático con "Detector de Huérfanos" (Blindaje Mesa 0)
   useEffect(() => {
-    // Si el carrito está vacío y no hay nada en disco, no hacemos nada
+    // 1. Si el carrito está vacío, limpiamos disco y paramos
     if (items.length === 0) {
         localStorage.removeItem('talanquera_cart');
         return;
     }
 
-    // Ponemos un pequeño retraso (150ms). 
-    // Si setItems se dispara muchas veces rápido, solo guardamos la última.
+    // 2. 🛡️ BISTURÍ: Identificamos el origen de los platos
+    const tienePlatosDeSanity = items.some(it => it.esDeOrdenGuardada || it._key);
+    const tienePlatosNuevos = items.some(it => !it.esDeOrdenGuardada && !it._key);
+
     const saveTimeout = setTimeout(() => {
+      // 🚨 LA REGLA DE ORO CONTRA DUPLICADOS:
+      // Si la tablet cree que NO hay una orden activa (null) pero los platos dicen que
+      // YA venían de Sanity, bloqueamos el guardado. Es un "fantasma" de una mesa ya cobrada.
+      if (tienePlatosDeSanity && !tienePlatosNuevos && !ordenActivaId) {
+          console.warn("🚫 [BLOQUEO_FANTASMA]: Evitando creación de Mesa 0 duplicada.");
+          return; 
+      }
+
+      // 3. Si pasa el filtro, guardamos normal (Tu lógica original intacta)
       localStorage.setItem('talanquera_cart', JSON.stringify(items));
       localStorage.setItem('talanquera_tipo_orden', tipoOrden || 'mesa');
     }, 150);
 
     return () => clearTimeout(saveTimeout);
-  }, [items, tipoOrden]);
+    
+    // 🛡️ RECUERDA: Agregamos ordenActivaId a las dependencias para que el radar funcione
+  }, [items, tipoOrden, ordenActivaId]);
   
   const addProduct = async (product) => {
     const pId = product._id || product.id;
     const insumoId = product.insumoVinculado?._ref;
-
-    // --- 🛡️ ESCUDO PREVENTIVO (Bloqueo Síncrono) ---
-    if (product.controlaInventario && insumoId) {
-      const stockEnProducto = Number(product.stockActual) || 0;
-      
-      if (!stockLocalCache.has(insumoId) || stockEnProducto > Number(stockLocalCache.get(insumoId))) {
-        stockLocalCache.set(insumoId, stockEnProducto);
-      }
-
-      const stockDisponible = Number(stockLocalCache.get(insumoId));
-      const cantidadADescontar = Number(product.cantidadADescontar) || 1;
-
-      if ((stockDisponible + 0.001) < cantidadADescontar) {
-        alert(`🚫 STOCK AGOTADO LOCAL: No puedes agregar más "${product.nombre}".`);
-        return; 
-      }
-
-      stockLocalCache.set(insumoId, stockDisponible - cantidadADescontar);
-    }
 
     // --- 🍎 1. LÓGICA VISUAL ---
     const precioNum = cleanPrice(product.precio);
@@ -132,67 +127,61 @@ export function CartProvider({ children }) {
             // Nota: Al no llevar _key aquí, forzamos que sea una línea nueva en Sanity al guardar.
         }];
     });
+    // --- 🛡️ LÓGICA DE INVENTARIO MULTI-INSUMO (Bisturí Senior Corregido) ---
+// --- 🛡️ ESCUDO PREVENTIVO MULTI-INSUMO (Fusión Blindada) ---
+if (product.controlaInventario) {
+  // 1. Armamos la receta (Soporta ambos formatos)
+  const receta = product.recetaInsumos || (product.insumoVinculado?._ref ? [{ 
+      insumoId: product.insumoVinculado._ref, 
+      cantidad: Number(product.cantidadADescontar) || 1 
+  }] : []);
 
-  // --- 🛡️ 2. LÓGICA DE INVENTARIO (VERSIÓN BLINDADA) ---
-    if (product.controlaInventario && insumoId) {
-      fetch('/api/inventario/descontar', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-            insumoId, 
-            cantidad: Number(product.cantidadADescontar) || 1 
-        })
-      })
-      .then(async (res) => {
-        const data = await res.json();
-
-        // 🚨 CASO 409: EL SERVIDOR DIJO NO (Stock insuficiente)
-        if (res.status === 409) {
-          // ✅ BISTURÍ: No asumimos 0. Seteamos lo que el servidor diga que hay.
-          stockLocalCache.set(insumoId, Number(data.disponible || 0));
-          
-          avisosDados.add(insumoId);
-
-          setItems(prev => {
-            // REVERSIÓN SEGURA: Solo afectamos lo que no se ha guardado (_key)
-            const idx = prev.findIndex(it => 
-                (it._id || it.id) === pId && 
-                !it._key && 
-                (it.comentario === (product.comentario || ''))
-            );
-            
-            if (idx === -1) return prev;
-            const copy = [...prev];
-            if (copy[idx].cantidad > 1) {
-                const nCant = copy[idx].cantidad - 1;
-                copy[idx] = { ...copy[idx], cantidad: nCant, subtotalNum: nCant * precioNum };
-                return copy;
-            } else {
-                return copy.filter((_, i) => i !== idx);
-            }
-          });
-
-          alert(`🚫 STOCK AGOTADO: El servidor indica que solo quedan ${data.disponible} unidades.`);
-          return;
-        }
-
-        // ✅ CASO 200: ÉXITO TOTAL
-        if (res.ok) {
-            // Sincronizamos el caché local con la verdad absoluta del servidor
-            stockLocalCache.set(insumoId, Number(data.nuevoStock));
-
-            if (data.alertaStockBajo && !avisosDados.has(insumoId)) {
-                avisosDados.add(insumoId);
-                alert(`⚠️ AVISO: Stock bajo de "${data.nombreInsumo || product.nombre}" (${data.nuevoStock} disp.)`);
-            }
-        }
-      })
-      .catch(err => {
-          console.error("🔥 Error crítico inventario:", err);
-          // 🛡️ Si la red falla, no dejamos que el usuario siga agregando a ciegas
-          stockLocalCache.set(insumoId, 0); 
-      });
+  if (receta.length > 0) {
+    // A. VALIDACIÓN LOCAL: Revisa todos los ingredientes antes de seguir
+    for (const item of receta) {
+      const dispLocal = stockLocalCache.get(item.insumoId) ?? (Number(product.stockActual) || 0);
+      if (Number(dispLocal) < item.cantidad) {
+        alert(`🚫 STOCK AGOTADO LOCAL: Falta ingrediente para "${product.nombre}".`);
+        return; 
+      }
     }
+
+    // B. DESCUENTO PREVENTIVO LOCAL: Restamos todos del caché de la tablet
+    receta.forEach(r => {
+      const actual = stockLocalCache.get(r.insumoId) ?? (Number(product.stockActual) || 0);
+      stockLocalCache.set(r.insumoId, actual - r.cantidad);
+    });
+
+    // C. LLAMADA AL SERVIDOR: Validamos con el insumo principal
+    const principal = receta[0];
+    fetch('/api/inventario/descontar', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ insumoId: principal.insumoId, cantidad: principal.cantidad })
+    })
+    .then(async (res) => {
+      const data = await res.json();
+      if (res.status === 409) {
+        // Si el servidor rebota, corregimos el caché y revertimos UI
+        stockLocalCache.set(principal.insumoId, Number(data.disponible || 0));
+        setItems(prev => {
+          const idx = prev.findIndex(it => (it._id || it.id) === pId && !it._key && (it.comentario === (product.comentario || '')));
+          if (idx === -1) return prev;
+          const copy = [...prev];
+          if (copy[idx].cantidad > 1) {
+            const n = copy[idx].cantidad - 1;
+            return copy.map((it, i) => i === idx ? { ...it, cantidad: n, subtotalNum: n * precioNum } : it);
+          }
+          return copy.filter((_, i) => i !== idx);
+        });
+        alert(`🚫 STOCK AGOTADO: Solo quedan ${data.disponible} unidades.`);
+      } else if (res.ok) {
+        // Sincronizamos con el stock real del servidor
+        stockLocalCache.set(principal.insumoId, Number(data.nuevoStock));
+      }
+    });
+  }
+}
 };
   const setCartFromOrden = (platosOrdenados = [], tipoDeSanity = 'mesa') => {
     // 🧹 Limpiamos el rastro del localStorage antes de cargar lo nuevo
@@ -227,34 +216,45 @@ export function CartProvider({ children }) {
   const itemADisminuir = items.find(i => i.lineId === lineId);
   if (!itemADisminuir) return;
 
-  const insumoId = itemADisminuir.insumoVinculado?._ref || itemADisminuir.insumoId;
+  // 1. Identificamos si tiene receta nueva o insumo antiguo
+  const tieneReceta = Array.isArray(itemADisminuir.recetaInsumos) && itemADisminuir.recetaInsumos.length > 0;
+  const insumoIdLegacy = itemADisminuir.insumoVinculado?._ref || itemADisminuir.insumoId;
 
-  if (itemADisminuir.controlaInventario && insumoId) {
-    // 🛡️ Calculamos la cantidad exacta que gasta UNA unidad de este plato
-    const unidadARestaurar = Number(itemADisminuir.cantidadADescontar) || 1;
+  if (itemADisminuir.controlaInventario) {
+    // 🛡️ Preparamos el array de items para devolver de forma atómica
+    let itemsParaDevolver = [];
 
-    // 🚀 Solo disparamos la API. El caché local se actualizará 
-    // automáticamente cuando useSWR refresque o cuando confirmemos el éxito.
-    fetch('/api/inventario/devolver', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ 
-        items: [{ 
-          insumoId: insumoId, 
-          cantidad: unidadARestaurar // Enviamos el valor neto a sumar
-        }] 
+    if (tieneReceta) {
+      // CASO NUEVO: Arroz Caribeño (Verdura + Camarón)
+      itemsParaDevolver = itemADisminuir.recetaInsumos.map(r => ({
+        insumoId: r.insumoId,
+        cantidad: Number(r.cantidad) || 1
+      }));
+    } else if (insumoIdLegacy) {
+      // CASO ANTIGUO: Insumo único
+      itemsParaDevolver = [{
+        insumoId: insumoIdLegacy,
+        cantidad: Number(itemADisminuir.cantidadADescontar) || 1
+      }];
+    }
+
+    // 🚀 Disparamos la devolución solo si hay algo que devolver
+    if (itemsParaDevolver.length > 0) {
+      fetch('/api/inventario/devolver', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ items: itemsParaDevolver })
       })
-    })
-    .then(res => {
-      if (res.ok) {
-        // Notificamos al sistema que hubo un cambio real en la base de datos
-        window.dispatchEvent(new Event('inventarioActualizado'));
-      }
-    })
-    .catch(err => console.error("Error al devolver stock:", err));
+      .then(res => {
+        if (res.ok) {
+          window.dispatchEvent(new Event('inventarioActualizado'));
+        }
+      })
+      .catch(err => console.error("Error al devolver stock:", err));
+    }
   }
 
-  // Lógica de UI: Bajamos la cantidad en pantalla
+  // --- Lógica de UI (Se mantiene EXACTAMENTE igual a tu original) ---
   setItems(prev => {
     const idx = prev.findIndex(i => i.lineId === lineId);
     if (idx === -1) return prev;
@@ -285,69 +285,62 @@ const clear = () => {
     localStorage.removeItem('talanquera_tipo_orden');
   };
   const clearWithStockReturn = async () => {
-    // 1. Mapeamos los items para que lleven el cálculo YA HECHO desde el cliente
-    const itemsParaDevolver = items
-      .filter(it => it.controlaInventario && (it.insumoVinculado?._ref || it.insumoId))
-      .map(it => ({
-        insumoId: it.insumoVinculado?._ref || it.insumoId,
-        // ✅ LA VERDAD: (Lo que gasta 1 plato) x (Cuántos platos hay en el carrito)
-        cantidad: (Number(it.cantidadADescontar) || 1) * (Number(it.cantidad) || 1)
-      }));
+    const itemsParaDevolver = [];
+    
+    items.forEach(it => {
+        if (it.controlaInventario) {
+            const receta = it.recetaInsumos || (it.insumoVinculado?._ref ? [{ insumoId: it.insumoVinculado._ref, cantidad: Number(it.cantidadADescontar) || 1 }] : []);
+            receta.forEach(r => {
+                itemsParaDevolver.push({
+                    insumoId: r.insumoId,
+                    cantidad: r.cantidad * it.cantidad
+                });
+            });
+        }
+    });
 
     if (itemsParaDevolver.length > 0) {
-      try {
-        const res = await fetch('/api/inventario/devolver', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ items: itemsParaDevolver })
-        });
-        
-        if (res.ok) {
-           console.log("✅ Stock restaurado en Sanity");
-           // Forzamos limpieza de memoria local para evitar datos "fantasma"
-           refreshStockLocal();
-           window.dispatchEvent(new Event('inventarioActualizado'));
-        }
-      } catch (e) {
-        console.error("Error devolviendo stock masivo:", e);
-      }
+        try {
+            const res = await fetch('/api/inventario/devolver', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ items: itemsParaDevolver })
+            });
+            if (res.ok) {
+                refreshStockLocal();
+                window.dispatchEvent(new Event('inventarioActualizado'));
+            }
+        } catch (e) { console.error(e); }
     }
-    
     clear(); 
 };
 
 const eliminarLineaConStock = async (lineId) => {
-    // 1. Capturamos el item ANTES de filtrar, validando que exista
-    const itemABorrar = items.find(it => it.lineId === lineId);
-    
-    if (!itemABorrar) {
-        console.warn("⚠️ No se encontró el item para borrar:", lineId);
-        return items; 
-    }
+    const it = items.find(it => it.lineId === lineId);
+    if (!it) return items;
 
-    // 2. Calculamos el nuevo carrito localmente (Inmutable)
     const nuevoCarrito = items.filter(it => it.lineId !== lineId);
 
-    // 3. Lógica de Inventario usando la referencia capturada
-    if (itemABorrar.controlaInventario) {
-        const insumoId = itemABorrar.insumoVinculado?._ref || itemABorrar.insumoId;
-        // Calculamos el total de esa línea (Ej: 3 arepas = 3 raciones de masa)
-        const cantidadADevolver = (Number(itemABorrar.cantidadADescontar) || 1) * (Number(itemABorrar.cantidad) || 1);
+    if (it.controlaInventario) {
+        // 🛡️ RECOLECTOR DE RECETA (Soporta nuevo y viejo)
+        const receta = it.recetaInsumos || (it.insumoVinculado?._ref ? [{ insumoId: it.insumoVinculado._ref, cantidad: Number(it.cantidadADescontar) || 1 }] : []);
         
-        try {
-            await fetch('/api/inventario/devolver', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ 
-                    items: [{ insumoId, cantidad: cantidadADevolver }] 
-                })
-            });
-            window.dispatchEvent(new Event('inventarioActualizado'));
-        } catch (err) {
-            console.error("❌ Error devolviendo stock de línea:", err);
+        if (receta.length > 0) {
+            const aDevolver = receta.map(r => ({
+                insumoId: r.insumoId,
+                cantidad: r.cantidad * it.cantidad // Multiplicamos por los platos en la línea
+            }));
+
+            try {
+                await fetch('/api/inventario/devolver', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ items: aDevolver })
+                });
+                window.dispatchEvent(new Event('inventarioActualizado'));
+            } catch (err) { console.error(err); }
         }
     }
-    // 4. Actualizamos el estado y retornamos el nuevo carrito para el Handler
     setItems(nuevoCarrito);
     return nuevoCarrito; 
 };
@@ -384,6 +377,10 @@ const eliminarLineaConStock = async (lineId) => {
       setCartFromOrden,
       tipoOrden,     
       setTipoOrden,
+      ordenActivaId, 
+      setOrdenMesa,  
+      ordenMesa,
+      setOrdenActivaId,
       decrease,
       clear,
       clearWithStockReturn,
@@ -399,7 +396,7 @@ const eliminarLineaConStock = async (lineId) => {
       cleanPrice: cleanPrice,
      refreshStockLocal 
       }), [
-      items, tipoOrden, total, metodoPago, propina, montoManual, eliminarLineaConStock, refreshStockLocal
+      items, tipoOrden, ordenActivaId, total, metodoPago, propina, montoManual, eliminarLineaConStock, refreshStockLocal
       ]);
 
   return (

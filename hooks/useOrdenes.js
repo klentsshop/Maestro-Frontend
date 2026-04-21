@@ -62,8 +62,8 @@ export function useOrdenes() {
         const ordenAEliminar = ordenes.find(o => o._id === ordenId);
 
         try {
-            if (ordenAEliminar && ordenAEliminar.platos) {
-                const platosParaDevolver = ordenAEliminar.platos
+            if (ordenAEliminar && ordenAEliminar.platosOrdenados) {
+                const platosParaDevolver = ordenAEliminar.platosOrdenados
                     .filter(p => p.controlaInventario && p.insumoVinculado?._ref)
                     .map(p => ({
                         insumos: [{ 

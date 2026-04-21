@@ -219,8 +219,24 @@ export default function TicketPreviewPage() {
                     </span>
                 </div>
             </div>
-
-
+            {/* 🛵 DATOS DE ENTREGA (NUEVA SECCIÓN) */}
+            {data.tipoOrden === 'domicilio' && data.datosEntrega && (
+                <div style={{ 
+                    marginTop: '15px', 
+                    padding: '10px', 
+                    border: '1.5px solid #000', 
+                    borderRadius: '4px',
+                    fontSize: '0.9rem' 
+                }}>
+                    <div style={{ textAlign: 'center', fontWeight: 'bold', textDecoration: 'underline', marginBottom: '5px' }}>
+                        DATOS PARA EL DOMICILIO
+                    </div>
+                    <p style={{ margin: '3px 0' }}><strong>CLIENTE:</strong> {data.datosEntrega.nombreCliente?.toUpperCase()}</p>
+                    <p style={{ margin: '3px 0' }}><strong>DIRECCIÓN:</strong> {data.datosEntrega.direccion?.toUpperCase()}</p>
+                    <p style={{ margin: '3px 0' }}><strong>TELÉFONO:</strong> {data.datosEntrega.telefono}</p>
+                </div>
+            )}
+         
             <p style={{ textAlign: 'center', marginTop: '20px', fontSize: '0.8rem' }}>
                 ¡Gracias por su visita!
             </p>
