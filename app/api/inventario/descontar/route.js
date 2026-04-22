@@ -3,59 +3,76 @@ import { sanityClientServer } from '@/lib/sanity';
 
 export async function POST(request) {
     try {
-        const { insumoId, cantidad } = await request.json();
+        const { receta } = await request.json();
 
-        if (!insumoId || !cantidad) {
-            return NextResponse.json({ error: 'Faltan datos' }, { status: 400 });
+        // 1. 🛡️ VALIDACIÓN DE ENTRADA (Lupa Senior)
+        if (!receta || !Array.isArray(receta) || receta.length === 0) {
+            return NextResponse.json({ error: 'Faltan datos o la receta está vacía' }, { status: 400 });
         }
 
-        // 🛡️ BISTURÍ: VALIDACIÓN ATÓMICA PREVIA
-        // Leemos el estado actual del insumo directamente del servidor antes de tocar nada
-        const insumoActual = await sanityClientServer.fetch(
-            `*[_id == $id][0]{stockActual, stockMinimo, nombre}`, 
-            { id: insumoId }
+        // 2. 🔍 LECTURA PREVIA COLECTIVA (Bisturí de Seguridad)
+        // Traemos los datos actuales de TODOS los insumos involucrados
+        const ids = receta.map(r => r.insumoId);
+        const insumosActuales = await sanityClientServer.fetch(
+            `*[_id in $ids]{ _id, stockActual, stockMinimo, nombre }`, 
+            { ids }
         );
 
-        if (!insumoActual) {
-            return NextResponse.json({ error: 'Insumo no encontrado' }, { status: 404 });
+        // 3. 📏 VALIDACIÓN DE UMBRAL (Atomicidad Preventiva)
+        // Si UN SOLO ingrediente no tiene stock, abortamos TODA la operación
+        for (const item of receta) {
+            const serverInsumo = insumosActuales.find(s => s._id === item.insumoId);
+            
+            if (!serverInsumo) {
+                return NextResponse.json({ error: `Insumo no encontrado: ${item.insumoId}` }, { status: 404 });
+            }
+
+            const stockDisponible = Number(serverInsumo.stockActual) || 0;
+            const cantidadARestar = Number(item.cantidad);
+
+            if (stockDisponible < cantidadARestar) {
+                return NextResponse.json({ 
+                    error: 'Stock insuficiente', 
+                    insumo: serverInsumo.nombre,
+                    disponible: stockDisponible 
+                }, { status: 409 });
+            }
         }
 
-        // 📏 VALIDACIÓN DE UMBRAL: Si lo que vamos a restar supera lo que hay, abortamos.
-        // Usamos un margen de 0.001 por si manejas decimales en recetas de Deli Arepa.
-        const stockDisponible = Number(insumoActual.stockActual) || 0;
-        const cantidadARestar = Number(cantidad);
+        // 4. 🚀 TRANSACCIÓN ATÓMICA (Ejecución de Blindaje)
+        // Solo llegamos aquí si todos los ingredientes pasaron la prueba
+        let transaction = sanityClientServer.transaction();
+        
+        receta.forEach(item => {
+            transaction = transaction.patch(item.insumoId, p => 
+                p.setIfMissing({ stockActual: 0, stockMinimo: 5 }) // Heredado de tu API vieja
+                 .dec({ stockActual: Number(item.cantidad) })
+            );
+        });
 
-        if (stockDisponible < cantidadARestar) {
-            return NextResponse.json({ 
-                error: 'Stock insuficiente', 
-                disponible: stockDisponible 
-            }, { status: 409 });
-        }
+        await transaction.commit();
 
-        // 1. Ejecutamos el descuento (Solo llegamos aquí si hay stock suficiente)
-        const result = await sanityClientServer
-            .patch(insumoId)
-            .setIfMissing({ stockActual: 0, stockMinimo: 5 })
-            .dec({ stockActual: cantidadARestar })
-            .commit();
+        // 5. 📊 RESPUESTA INTEGRAL (Match con el POS)
+        // Re-leemos para devolver el estado final exacto del servidor
+        const finales = await sanityClientServer.fetch(
+            `*[_id in $ids]{ _id, stockActual, stockMinimo, nombre }`, 
+            { ids }
+        );
 
-        // 2. INTEGRACIÓN ALERTA STOCK MÍNIMO
-        // Usamos el stockMinimo definido en Sanity o 5 por defecto si no existe
-        const umbralMinimo = result.stockMinimo ?? 5;
-        const esStockBajo = result.stockActual <= umbralMinimo;
-
-        // 3. RESPUESTA EXITOSA
         return NextResponse.json({ 
             success: true, 
-            nuevoStock: result.stockActual,
-            alertaStockBajo: esStockBajo, 
-            nombreInsumo: result.nombre || insumoActual.nombre
+            actualizaciones: finales.map(s => ({
+                insumoId: s._id,
+                nuevoStock: s.stockActual,
+                alertaStockBajo: s.stockActual <= (s.stockMinimo ?? 5),
+                nombreInsumo: s.nombre
+            }))
         });
 
     } catch (error) {
-        console.error('🔥 [INVENTARIO_ERROR]:', error.message);
+        console.error('🔥 [SUPER_API_INVENTARIO_ERROR]:', error.message);
         return NextResponse.json({ 
-            error: 'Error interno en el servidor de inventario',
+            error: 'Error interno en la transacción de inventario',
             details: error.message 
         }, { status: 500 });
     }

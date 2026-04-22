@@ -87,102 +87,94 @@ export function CartProvider({ children }) {
   
   const addProduct = async (product) => {
     const pId = product._id || product.id;
-    const insumoId = product.insumoVinculado?._ref;
-
-    // --- 🍎 1. LÓGICA VISUAL ---
+    const insumoId = product.insumoVinculado?._ref; // ✅ Se mantiene intacto
     const precioNum = cleanPrice(product.precio);
 
+    // --- 🍎 1. LÓGICA VISUAL (Carrito - Tu lógica original sin cambios) ---
     setItems(prev => {
-      // 🛡️ COMPARACIÓN PRO: Busca el mismo producto Y que tenga el MISMO comentario
       const existingIdx = prev.findIndex(it => 
         (it._id || it.id) === pId && 
-       (it.comentario === (product.comentario || '')) &&
-            !it._key // <--- 🔑 CORAZÓN DEL CAMBIO: Solo agrupa si es nuevo localmente
-        );
+        (it.comentario === (product.comentario || '')) &&
+        !it._key 
+      );
+
       if (existingIdx !== -1) {
         const copy = [...prev];
         const itemActual = copy[existingIdx];
         const nuevaCantidad = itemActual.cantidad + 1;
-
         copy[existingIdx] = { 
-                ...itemActual,           
-                ...product,              // Re-sincronizamos datos frescos del producto
-                _id: pId,                
-                cantidad: nuevaCantidad, 
-                subtotalNum: nuevaCantidad * precioNum 
-            };
-            return copy;
-        }
+          ...itemActual,           
+          ...product,
+          _id: pId,                
+          cantidad: nuevaCantidad, 
+          subtotalNum: nuevaCantidad * precioNum 
+        };
+        return copy;
+      }
 
       return [...prev, { 
-            ...product, 
-            _id: pId, 
-            lineId: crypto.randomUUID(), // Identidad única para la APK
-            cantidad: 1, 
-            precioNum, 
-            subtotalNum: precioNum, 
-            comentario: product.comentario || '', 
-            categoria: (product.categoria || "").toString().toUpperCase().trim(),
-            seImprime: product.seImprime ?? true 
-            // Nota: Al no llevar _key aquí, forzamos que sea una línea nueva en Sanity al guardar.
-        }];
+        ...product, 
+        _id: pId, 
+        lineId: crypto.randomUUID(),
+        cantidad: 1, 
+        precioNum, 
+        subtotalNum: precioNum, 
+        comentario: product.comentario || '', 
+        categoria: (product.categoria || "").toString().toUpperCase().trim(),
+        seImprime: product.seImprime ?? true 
+      }];
     });
-    // --- 🛡️ LÓGICA DE INVENTARIO MULTI-INSUMO (Bisturí Senior Corregido) ---
-// --- 🛡️ ESCUDO PREVENTIVO MULTI-INSUMO (Fusión Blindada) ---
-if (product.controlaInventario) {
-  // 1. Armamos la receta (Soporta ambos formatos)
-  const receta = product.recetaInsumos || (product.insumoVinculado?._ref ? [{ 
-      insumoId: product.insumoVinculado._ref, 
-      cantidad: Number(product.cantidadADescontar) || 1 
-  }] : []);
 
-  if (receta.length > 0) {
-    // A. VALIDACIÓN LOCAL: Revisa todos los ingredientes antes de seguir
-    for (const item of receta) {
-      const dispLocal = stockLocalCache.get(item.insumoId) ?? (Number(product.stockActual) || 0);
-      if (Number(dispLocal) < item.cantidad) {
-        alert(`🚫 STOCK AGOTADO LOCAL: Falta ingrediente para "${product.nombre}".`);
-        return; 
+    // --- 🛡️ 2. LÓGICA DE INVENTARIO (Fusión Atómica Blindada) ---
+    if (product.controlaInventario) {
+      const receta = (product.recetaInsumos || []).length > 0 
+        ? product.recetaInsumos 
+        : (product.insumoVinculado?._ref ? [{ 
+            insumoId: product.insumoVinculado._ref, 
+            cantidad: Number(product.cantidadADescontar) || 1 
+          }] : []);
+
+      if (receta.length > 0) {
+        // A. VALIDACIÓN LOCAL: Solo bloqueamos si el caché dice 0.
+        for (const item of receta) {
+          const dispLocal = stockLocalCache.get(item.insumoId);
+          if (dispLocal !== undefined && Number(dispLocal) < item.cantidad) {
+            alert(`🚫 STOCK AGOTADO LOCAL: Falta ingrediente para "${product.nombre}".`);
+            return; 
+          }
+        }
+
+        // B. ELIMINAMOS EL DESCUENTO PREVENTIVO LOCAL (Evita el descuadre)
+        // Ya no restamos aquí manualmente. Dejamos que la API nos de el valor real.
+
+        // C. LLAMADA AL SERVIDOR ATÓMICA
+        fetch('/api/inventario/descontar', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ receta }) 
+        })
+        .then(async (res) => {
+          const data = await res.json();
+          if (res.ok && data.success) {
+            // ✅ Sincronizamos el caché con la ÚNICA verdad: el servidor
+            data.actualizaciones.forEach(upd => {
+              stockLocalCache.set(upd.insumoId, Number(upd.nuevoStock));
+              
+              // 🚨 ALERTA INTELIGENTE: Solo si el servidor dice que bajó del mínimo
+              if (upd.alertaStockBajo && !avisosDados.has(upd.insumoId)) {
+                alert(`⚠️ STOCK MÍNIMO: El insumo "${upd.nombreInsumo}" llegó a ${upd.nuevoStock}.`);
+                avisosDados.add(upd.insumoId);
+              }
+            });
+            window.dispatchEvent(new Event('inventarioActualizado'));
+          } else if (res.status === 409) {
+            alert(`🚫 AGOTADO: ${data.insumo || 'Ingrediente'} insuficiente en cocina.`);
+          }
+        })
+        .catch(err => console.error("🔥 Error de red:", err));
       }
     }
-
-    // B. DESCUENTO PREVENTIVO LOCAL: Restamos todos del caché de la tablet
-    receta.forEach(r => {
-      const actual = stockLocalCache.get(r.insumoId) ?? (Number(product.stockActual) || 0);
-      stockLocalCache.set(r.insumoId, actual - r.cantidad);
-    });
-
-    // C. LLAMADA AL SERVIDOR: Validamos con el insumo principal
-    const principal = receta[0];
-    fetch('/api/inventario/descontar', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ insumoId: principal.insumoId, cantidad: principal.cantidad })
-    })
-    .then(async (res) => {
-      const data = await res.json();
-      if (res.status === 409) {
-        // Si el servidor rebota, corregimos el caché y revertimos UI
-        stockLocalCache.set(principal.insumoId, Number(data.disponible || 0));
-        setItems(prev => {
-          const idx = prev.findIndex(it => (it._id || it.id) === pId && !it._key && (it.comentario === (product.comentario || '')));
-          if (idx === -1) return prev;
-          const copy = [...prev];
-          if (copy[idx].cantidad > 1) {
-            const n = copy[idx].cantidad - 1;
-            return copy.map((it, i) => i === idx ? { ...it, cantidad: n, subtotalNum: n * precioNum } : it);
-          }
-          return copy.filter((_, i) => i !== idx);
-        });
-        alert(`🚫 STOCK AGOTADO: Solo quedan ${data.disponible} unidades.`);
-      } else if (res.ok) {
-        // Sincronizamos con el stock real del servidor
-        stockLocalCache.set(principal.insumoId, Number(data.nuevoStock));
-      }
-    });
-  }
-}
-};
+  };
   const setCartFromOrden = (platosOrdenados = [], tipoDeSanity = 'mesa') => {
     // 🧹 Limpiamos el rastro del localStorage antes de cargar lo nuevo
     localStorage.removeItem('talanquera_cart');
