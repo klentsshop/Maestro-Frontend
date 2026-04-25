@@ -213,40 +213,39 @@ export function useOrdenHandlers({
     // COBRAR ORDEN (VERSIÓN FINAL BLINDADA)
     // ==============================
     const cobrarOrden = async (metodoPrimario, args = null) => {
-        
         if (mensajeExito) return;
         if (cart.length === 0) return alert("⚠️ El carrito está vacío.");
         if (!esModoCajero) return alert("⚠️ Solo el cajero puede realizar cobros directos.");
-        
-        // 🛵 1. CAPTURA DE DATOS DE DOMICILIO (Si aplica)
-    let datosEntrega = null;
-    if (tipoOrden === 'domicilio') {
-        const nombre = prompt("Nombre del Cliente (Domicilio):", "");
-        const direccion = prompt("Dirección de Entrega:", "");
-        const telefono = prompt("Teléfono de Contacto:", "");
-        
-        // Solo creamos el objeto si el cajero llenó al menos la dirección
-        if (nombre || direccion || telefono) {
-            datosEntrega = {
-                nombreCliente: nombre || "N/A",
-                direccion: direccion || "N/A",
-                telefono: telefono || "N/A"
-            };
+
+        // ⚓ ANCLA DE IDENTIDAD (Protege contra el "Rebautizo" de mesa)
+        const idParaCerrar = ordenActivaId; 
+        const mesaParaVenta = ordenMesa || "0"; 
+
+        // 🛵 1. CAPTURA DE DATOS DE DOMICILIO
+        let datosEntrega = null;
+        if (tipoOrden === 'domicilio') {
+            const nombre = prompt("Nombre del Cliente (Domicilio):", "");
+            const direccion = prompt("Dirección de Entrega:", "");
+            const telefono = prompt("Teléfono de Contacto:", "");
+            if (nombre || direccion || telefono) {
+                datosEntrega = {
+                    nombreCliente: nombre || "N/A",
+                    direccion: direccion || "N/A",
+                    telefono: telefono || "N/A"
+                };
+            }
         }
-    }
 
         let detalleFinal = [];
-        let metodoParaConfirmar = metodoPrimario; 
         
-        // 1. Lógica de métodos (Modal y Prompt)
+        // 💰 2. LÓGICA DE MÉTODOS (Recuperada y protegida)
         if (metodoPrimario === 'mixto_v2' && args) {
             detalleFinal = [
                 { metodo: 'efectivo', monto: Number(args.efectivo || 0) },
                 { metodo: 'tarjeta', monto: Number(args.tarjeta || 0) },
                 { metodo: 'digital', monto: Number(args.digital || 0) }
             ].filter(p => p.monto > 0);
-            metodoParaConfirmar = "PAGO DIVIDIDO (MODAL)"; 
-        }
+        } 
         else if (metodoPrimario === 'mixto') {
             const efectivo = Number(prompt("Monto en EFECTIVO:", "0"));
             if (isNaN(efectivo) || efectivo < 0) return alert("Monto inválido");
@@ -256,10 +255,9 @@ export function useOrdenHandlers({
                 { metodo: 'efectivo', monto: efectivo },
                 { metodo: 'tarjeta', monto: tarjeta }
             ];
-            metodoParaConfirmar = `MIXTO (Efe: $${efectivo.toLocaleString()} - Tarj:$${tarjeta.toLocaleString()})`;
-        } else {
+        } 
+        else {
             detalleFinal = [{ metodo: metodoPrimario, monto: total }];
-            metodoParaConfirmar = metodoPrimario.toUpperCase();
         }
 
         // 💰 Cálculo de Propina
@@ -267,9 +265,10 @@ export function useOrdenHandlers({
         const valorPropina = total > subtotalVenta ? total - subtotalVenta : 0;
 
         const transaccionId = dnaCobro || `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+        
+        setMensajeExito(true);
         if (!dnaCobro) setDnaCobro(transaccionId);
 
-        setMensajeExito(true);
         const fechaLocal = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Bogota' })).toISOString();
 
         try {
@@ -277,7 +276,7 @@ export function useOrdenHandlers({
                 method: 'POST', 
                 headers: { 'Content-Type': 'application/json' }, 
                 body: JSON.stringify({ 
-                    mesa: ordenMesa || "0", 
+                    mesa: mesaParaVenta, // ✅ Usamos el ancla
                     tipoOrden: tipoOrden || "mesa",
                     datosEntrega,
                     mesero: nombreMesero || "Caja", 
@@ -287,7 +286,7 @@ export function useOrdenHandlers({
                     propinaRecaudada: Number(valorPropina),
                     fechaLocal, 
                     transaccionId, 
-                    ordenId: ordenActivaId || null, 
+                    ordenId: idParaCerrar || null, // ✅ Usamos el ancla (Cierra la mesa real)
                     platosVendidosV2: cart.map(i => ({ 
                         nombrePlato: i.nombre || i.nombrePlato,
                         cantidad: i.cantidad, 
@@ -299,8 +298,7 @@ export function useOrdenHandlers({
             });
 
             if (res.ok) {
-                // 🛡️ PASO 1: MATAR IDENTIDAD INMEDIATAMENTE
-                // Esto evita que si hay un re-render, el sistema crea que hay una mesa viva.
+                // 🧹 LIMPIEZA TOTAL TRAS ÉXITO
                 setOrdenActivaId(null); 
                 setOrdenMesa(null); 
                 setDnaCobro(null);
@@ -312,28 +310,26 @@ export function useOrdenHandlers({
                     total: total,
                     metodoPago: metodoPrimario,
                     detallePagos: detalleFinal,
-                    mesa: ordenMesa || "0",
+                    mesa: mesaParaVenta,
                     mesero: nombreMesero || "Caja",
                     fecha: fechaLocal,
-                    tipoOrden: tipoOrden,
+                    tipoOrden,
                     datosEntrega
                 }));
 
-                // ⏳ PASO 2: TIEMPO DE GRACIA PARA SANITY (1.2 segundos)
-                // Es el tiempo necesario para que refreshOrdenes no traiga la mesa vieja.
-                setTimeout(async () => {
-                    clearCart(); // Limpiamos el carrito al final
-                    await refreshOrdenes();
-                    if (rep?.cargarReporteAdmin) rep.cargarReporteAdmin();
-                    setMensajeExito(false); // Liberamos el botón al final
-                }, 1200); 
+                clearCart(); 
+                await refreshOrdenes();
+                if (rep?.cargarReporteAdmin) rep.cargarReporteAdmin();
+
+                setTimeout(() => setMensajeExito(false), 1000); 
 
             } else {
                 setMensajeExito(false);
-                alert("❌ Error en el servidor al procesar la venta.");
+                alert("❌ Error: Sanity no recibió el cierre de mesa.");
             }
         } catch (e) { 
             setMensajeExito(false);
+            console.error("Error en cobro:", e);
             alert('❌ Error en el pago. Revisa la conexión.'); 
         }
     };

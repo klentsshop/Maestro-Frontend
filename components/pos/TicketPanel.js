@@ -16,29 +16,51 @@ function InputComentario({ item, actualizarComentario }) {
     useEffect(() => {
         setTexto(item.comentario || '');
     }, [item.comentario]);
+
+    const manejarSalida = (e) => {
+        const el = e.target;
+        el.rows = 1; 
+        el.style.overflow = 'hidden';
+        actualizarComentario(item.lineId, texto);
+    };
+
     return (
-        <input 
-            type="text"
+        <textarea 
             placeholder="📝 Notas para cocina (Ej: Sin sopa)..."
             value={texto}
+            rows={1} 
             onChange={(e) => setTexto(e.target.value)}
-            onBlur={() => actualizarComentario(item.lineId, texto)}
+            onBlur={manejarSalida}
+            onFocus={(e) => {
+                const el = e.target;
+                const lineas = el.value.split('\n').length;
+                el.rows = Math.max(lineas, 2); 
+                el.style.overflow = 'auto';
+            }}
             onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                    actualizarComentario(item.lineId, texto);
+                if (e.key === 'Enter' && !e.shiftKey) { 
+                    e.preventDefault(); 
                     e.target.blur();
                 }
             }}
             style={{ 
                 marginTop: '6px', 
                 padding: '6px 10px', 
-                fontSize: '0.85rem', 
+                fontSize: '0.85rem', // 🎯 Exactamente tu medida
                 border: '1px dashed #D1D5DB', 
                 borderRadius: '6px', 
                 backgroundColor: 'white', 
                 color: SITE_CONFIG.theme.textDark, 
                 outline: 'none', 
-                width: '100%'
+                width: '100%',
+                resize: 'none', 
+                lineHeight: '1.2',
+                display: 'block',
+                overflow: 'hidden',
+                // 🛡️ ESTO ES LO QUE FALTA PARA QUE LA LETRA SEA IDÉNTICA:
+                fontFamily: 'inherit',
+                fontWeight: 'inherit',
+                boxSizing: 'border-box'
             }}
         />
     );

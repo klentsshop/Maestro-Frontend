@@ -77,7 +77,7 @@ export async function POST(req) {
             mesa,
             mesero,
             tipoOrden,
-            datosEntrega: datosEntrega || null,
+            ...(datosEntrega && typeof datosEntrega === 'object' ? { datosEntrega } : {}),
             metodoPago: (metodoPago === 'mixto_v2' || detallePagosValido.length > 1) ? 'mixto_v2' : metodoPago,
             detallePagos: detallePagosValido.map(p => ({
                 _key: crypto.randomUUID(),
@@ -97,7 +97,7 @@ export async function POST(req) {
             mesa,
             mesero,
             tipoOrden,
-            datosEntrega: datosEntrega || null,
+            ...(datosEntrega && typeof datosEntrega === 'object' ? { datosEntrega } : {}),
             metodoPago: detallePagosValido.length > 1 ? 'múltiple' : metodoPago,
             items: platosVenta.map(p => ({
                 _key: crypto.randomUUID(),
