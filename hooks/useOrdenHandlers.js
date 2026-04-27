@@ -276,7 +276,7 @@ export function useOrdenHandlers({
                 method: 'POST', 
                 headers: { 'Content-Type': 'application/json' }, 
                 body: JSON.stringify({ 
-                    mesa: mesaParaVenta, // ✅ Usamos el ancla
+                    mesa: mesaParaVenta,
                     tipoOrden: tipoOrden || "mesa",
                     datosEntrega,
                     mesero: nombreMesero || "Caja", 
@@ -286,7 +286,7 @@ export function useOrdenHandlers({
                     propinaRecaudada: Number(valorPropina),
                     fechaLocal, 
                     transaccionId, 
-                    ordenId: idParaCerrar || null, // ✅ Usamos el ancla (Cierra la mesa real)
+                    ordenId: idParaCerrar || null,
                     platosVendidosV2: cart.map(i => ({ 
                         nombrePlato: i.nombre || i.nombrePlato,
                         cantidad: i.cantidad, 
@@ -298,7 +298,20 @@ export function useOrdenHandlers({
             });
 
             if (res.ok) {
-                // 🧹 LIMPIEZA TOTAL TRAS ÉXITO
+                const data = await res.json();
+
+                // 🛡️ ESCUDO ANTI-LAG: Si la API dice que ya se procesó, limpiamos sin duplicar ticket
+                if (data.yaProcesada) {
+                    setOrdenActivaId(null); 
+                    setOrdenMesa(null); 
+                    setDnaCobro(null);
+                    clearCart(); 
+                    await refreshOrdenes();
+                    setTimeout(() => setMensajeExito(false), 1000);
+                    return; // 🏁 Salimos aquí, no hace falta hacer el resto
+                }
+
+                // ✅ ÉXITO NORMAL: LIMPIEZA Y PREPARACIÓN DE TICKET
                 setOrdenActivaId(null); 
                 setOrdenMesa(null); 
                 setDnaCobro(null);
@@ -324,13 +337,16 @@ export function useOrdenHandlers({
                 setTimeout(() => setMensajeExito(false), 1000); 
 
             } else {
+                // 🛡️ SI DA ERROR (400 - Referencia Perdida o 500):
+                const errorData = await res.json();
                 setMensajeExito(false);
-                alert("❌ Error: Sanity no recibió el cierre de mesa.");
+                // No limpiamos el carrito para que el cajero pueda reintentar
+                alert(`❌ Error: ${errorData.message || "Sanity no recibió el cierre de mesa."}`);
             }
         } catch (e) { 
             setMensajeExito(false);
             console.error("Error en cobro:", e);
-            alert('❌ Error en el pago. Revisa la conexión.'); 
+            alert('❌ Error de conexión. El pedido sigue en pantalla, revisa el internet y reintenta.'); 
         }
     };
     const cancelarOrden = async () => {

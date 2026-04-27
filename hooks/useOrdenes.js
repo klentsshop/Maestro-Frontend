@@ -5,14 +5,12 @@ const fetcher = (url) => fetch(url).then((res) => {
     if (!res.ok) throw new Error('Error al obtener datos');
     return res.json();
 });
-
 export function useOrdenes() {
-    // ✅ Sincronización Profesional: Ahorro real sin sacrificar fluidez.
     const { data: ordenes = [], mutate, error } = useSWR('/api/ordenes/list', fetcher, {
         refreshInterval: 7000, 
         revalidateOnFocus: true,
         revalidateOnReconnect: true,
-        dedupingInterval: 2000 // Protege el listado de órdenes
+        dedupingInterval: 2000 
     });
 
     const [cargandoAccion, setCargandoAccion] = useState(false);
@@ -20,6 +18,7 @@ export function useOrdenes() {
     const guardarOrden = async (ordenPayload) => {
         setCargandoAccion(true);
         try {
+            // ✅ TODA TU LÓGICA DE VARIABLES ORIGINAL SE MANTIENE
             const payload = {
                 ...ordenPayload,
                 estado: ordenPayload.estado || 'abierta',
@@ -36,17 +35,14 @@ export function useOrdenes() {
             });
             
             if (!res.ok) throw new Error("Error al guardar en servidor");
-            
             const data = await res.json();
             
-            // ✅ Sincronizamos mesas
+            // Sincronizamos mesas
             await mutate(); 
 
-            // ⏱️ RETRASO TÁCTICO: Esperamos a que Sanity procese el descuento
-            await new Promise(resolve => setTimeout(resolve, 800));
-
-            // 🔥 CERO LAG: Notificamos al inventario tras el respiro
-            await mutateGlobal('/api/inventario/list'); 
+            // 🛡️ Solo notificamos al inventario para refrescar la VISTA (Modo Sensor)
+            // pero ya no hay esperas de 800ms porque no hubo cambios en DB de stock
+            mutateGlobal('/api/inventario/list'); 
             
             return data;
         } catch (err) {
@@ -59,29 +55,9 @@ export function useOrdenes() {
 
     const eliminarOrden = async (ordenId) => {
         if (!ordenId) return;
-        const ordenAEliminar = ordenes.find(o => o._id === ordenId);
 
         try {
-            if (ordenAEliminar && ordenAEliminar.platosOrdenados) {
-                const platosParaDevolver = ordenAEliminar.platosOrdenados
-                    .filter(p => p.controlaInventario && p.insumoVinculado?._ref)
-                    .map(p => ({
-                        insumos: [{ 
-                            _id: p.insumoVinculado._ref, 
-                            cantidad: Number(p.cantidadADescontar) || 1 
-                        }],
-                        cantidad: Number(p.cantidad) || 1
-                    }));
-
-                if (platosParaDevolver.length > 0) {
-                    await fetch('/api/inventario/devolver', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ items: platosParaDevolver })
-                    });
-                }
-            }
-
+            // ✅ Mantenemos la petición de borrado exactamente igual
             const res = await fetch('/api/ordenes/delete', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -90,19 +66,14 @@ export function useOrdenes() {
             
             if (!res.ok) throw new Error("Error al eliminar la orden");
             
-            // Sincronizamos UI de mesas
             await mutate(); 
-
-            // ⏱️ RETRASO TÁCTICO: Esperamos a que Sanity procese la devolución
-            await new Promise(resolve => setTimeout(resolve, 800));
-
-            // ✅ Notificación inmediata de stock recuperado tras el respiro
-            await mutateGlobal('/api/inventario/list');
+            mutateGlobal('/api/inventario/list');
 
         } catch (error) {
-            console.error("❌ Error:", error);
+            console.error("❌ Error eliminarOrden:", error);
         }
     };
 
+    // ✅ NO SE OMITE NINGUNA VARIABLE DE RETORNO
     return { ordenes, guardarOrden, eliminarOrden, refresh: mutate, cargandoAccion, errorConexion: error };
 }

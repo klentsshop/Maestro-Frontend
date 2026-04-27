@@ -29,7 +29,35 @@ export async function POST(req) {
         const seed = transaccionId ? transaccionId.slice(-4).toUpperCase() : (crypto.randomBytes(2).toString('hex')).toUpperCase();
         const folioGenerado = `TAL-${datePart}-${seed}`;
         const ventaId = transaccionId ? `venta-${transaccionId}` : `venta-${Date.now()}`;
-
+        
+        // ==========================================
+        // 🛡️ ESCUDO ANTI-FANTASMAS (EL BLOQUEO MAESTRO)
+        // ==========================================
+        if (ordenId) {
+            const mesaExiste = await sanityClientServer.fetch(
+                `defined(*[_type == "ordenActiva" && _id == $id][0])`, 
+                { id: ordenId }
+            );
+            
+            if (!mesaExiste) {
+                console.warn(`⚠️ Cobro duplicado evitado: ${ordenId}`);
+                return NextResponse.json({ 
+                    ok: true, 
+                    yaProcesada: true, 
+                    message: 'Esta mesa ya fue cerrada anteriormente.' 
+                }, { status: 200 });
+            }
+        } else {
+            // Regla para Caja Rápida
+            const esCajaRapida = mesa === '0' || mesa === 'General' || mesa === '';
+            if (!esCajaRapida) {
+                return NextResponse.json({ 
+                    ok: false, 
+                    error: 'REFERENCIA_PERDIDA', 
+                    message: 'No se puede cobrar una mesa guardada sin su ID original.' 
+                }, { status: 400 });
+            }
+        }
         // --- 🚀 BÚSQUEDA DE IDS Y RECETAS ---
         const nombresPlatos = (payload.platosVendidosV2 || []).map(item => item.nombrePlato || item.nombre);
         const mapeoSanity = await sanityClientServer.fetch(
@@ -121,28 +149,43 @@ export async function POST(req) {
         }
 
         // 4. 🔥 POPULARIDAD E INVENTARIO (Fusión Blindada)
+       // 4. 🔥 POPULARIDAD E INVENTARIO (Fusión Atómica Senior)
         (payload.platosVendidosV2 || []).forEach(p => {
             const nombrePlato = p.nombrePlato || p.nombre;
             const match = mapeoSanity.find(m => m.nombre === nombrePlato);
-            const realId = match ? match._id : (p._id && !p._id.includes(' ') ? p._id : null);
-
-            if (realId && realId.length > 5) {
-                // A. Popularidad
-                transaction = transaction.patch(realId, {
+            
+            // Usamos el ID del match de Sanity para asegurar que el patch llegue al documento correcto
+            if (match && match._id) {
+                // A. Popularidad del plato
+                transaction = transaction.patch(match._id, {
                     setIfMissing: { totalVentas: 0 },
                     inc: { totalVentas: Number(p.cantidad) || 1 }
                 });
 
+                // B. Descuento de Inventario (Solo si el plato lo requiere)
+                if (match.controlaInventario) {
+                    const cantPlato = Number(p.cantidad) || 1;
+                    
+                    // CASO 1: Sistema de Receta (Múltiples ingredientes)
+                    if (Array.isArray(match.recetaInsumos) && match.recetaInsumos.length > 0) {
+                        match.recetaInsumos.forEach(insumoItem => {
+                            if (insumoItem.insumoId) {
+                                transaction = transaction.patch(insumoItem.insumoId, {
+                                    inc: { stockActual: -(Number(insumoItem.cantidad) * cantPlato) }
+                                });
+                            }
+                        });
+                    } 
+                    // CASO 2: Sistema de Insumo Vinculado (Un solo ingrediente)
+                    else if (match.insumoVinculado && match.insumoVinculado._ref) {
+                        const cantADescontar = Number(match.cantidadADescontar) || 1;
+                        transaction = transaction.patch(match.insumoVinculado._ref, {
+                            inc: { stockActual: -(cantADescontar * cantPlato) }
+                        });
+                    }
+                }
             }
         });
-
-        // 🛡️ SEGURIDAD FINAL: Evitar duplicados por reintento
-        if (ordenId) {
-            const mesaExiste = await sanityClientServer.fetch(`defined(*[_type == "ordenActiva" && _id == $id][0])`, { id: ordenId });
-            if (!mesaExiste) {
-                return NextResponse.json({ ok: true, message: 'Venta ya procesada anteriormente.' }, { status: 200 });
-            }
-        }
 
         // 🚀 EL MOMENTO DE LA VERDAD
         await transaction.commit();

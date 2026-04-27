@@ -85,7 +85,7 @@ export function CartProvider({ children }) {
     // 🛡️ RECUERDA: Agregamos ordenActivaId a las dependencias para que el radar funcione
   }, [items, tipoOrden, ordenActivaId]);
   
-  const addProduct = async (product) => {
+  const addProduct = React.useCallback(async (product) => {
     const pId = product._id || product.id;
     const insumoId = product.insumoVinculado?._ref; // ✅ Se mantiene intacto
     const precioNum = cleanPrice(product.precio);
@@ -125,56 +125,48 @@ export function CartProvider({ children }) {
       }];
     });
 
-    // --- 🛡️ 2. LÓGICA DE INVENTARIO (Fusión Atómica Blindada) ---
+    // --- 🛡️ 2. LÓGICA DE INVENTARIO (Velocidad Rayo + Validación Real de Sanity) ---
     if (product.controlaInventario) {
-      const receta = (product.recetaInsumos || []).length > 0 
-        ? product.recetaInsumos 
-        : (product.insumoVinculado?._ref ? [{ 
-            insumoId: product.insumoVinculado._ref, 
-            cantidad: Number(product.cantidadADescontar) || 1 
-          }] : []);
+        const receta = (product.recetaInsumos || []).length > 0 
+            ? product.recetaInsumos 
+            : (product.insumoVinculado?._ref ? [{ 
+                insumoId: product.insumoVinculado._ref, 
+                cantidad: Number(product.cantidadADescontar) || 1 
+            }] : []);
 
-      if (receta.length > 0) {
-        // A. VALIDACIÓN LOCAL: Solo bloqueamos si el caché dice 0.
-        for (const item of receta) {
-          const dispLocal = stockLocalCache.get(item.insumoId);
-          if (dispLocal !== undefined && Number(dispLocal) < item.cantidad) {
-            alert(`🚫 STOCK AGOTADO LOCAL: Falta ingrediente para "${product.nombre}".`);
-            return; 
-          }
+        if (receta.length > 0) {
+            // ⚡ PASO A: VALIDACIÓN INSTANTÁNEA (Caché Local)
+            // Evita el "segundo eterno". Si la tablet ya sabe que no hay, bloquea de una.
+            for (const item of receta) {
+                const stockCache = stockLocalCache.get(item.insumoId);
+                if (stockCache !== undefined && stockCache < item.cantidad) {
+                    alert(`🚫 AGOTADO: No hay stock suficiente para el producto: "${product.nombre}".`);
+                    return; 
+                }
+            }
+
+            // 🛰️ PASO B: VALIDACIÓN DE FONDO (Sin 'await' para que el POS vuele)
+            fetch(`/api/inventario/list`, { cache: 'no-store' })
+                .then(res => res.json())
+                .then(insumosServer => {
+                    for (const req of receta) {
+                        const serverMatch = insumosServer.find(s => s._id === req.insumoId);
+                        if (serverMatch) {
+                            const stockReal = Number(serverMatch.stockActual) || 0;
+                            stockLocalCache.set(serverMatch._id, stockReal);
+
+                            // 🚨 ALERTA ESPECÍFICA: Si el servidor dice que ya NO hay 
+                            // pero el mesero ya lo metió al carrito hace un milisegundo:
+                            if (stockReal < req.cantidad) {
+                                alert(`🚨 ¡ATENCIÓN MESERO! \n\nEl producto "${product.nombre}" se acaba de agotar en cocina (Falta: ${serverMatch.nombre}). \n\nPor favor, elimínalo de la orden actual.`);
+                            }
+                        }
+                    }
+                })
+                .catch(err => console.warn("Lag de red: Validación de fondo pendiente."));
         }
-
-        // B. ELIMINAMOS EL DESCUENTO PREVENTIVO LOCAL (Evita el descuadre)
-        // Ya no restamos aquí manualmente. Dejamos que la API nos de el valor real.
-
-        // C. LLAMADA AL SERVIDOR ATÓMICA
-        fetch('/api/inventario/descontar', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ receta }) 
-        })
-        .then(async (res) => {
-          const data = await res.json();
-          if (res.ok && data.success) {
-            // ✅ Sincronizamos el caché con la ÚNICA verdad: el servidor
-            data.actualizaciones.forEach(upd => {
-              stockLocalCache.set(upd.insumoId, Number(upd.nuevoStock));
-              
-              // 🚨 ALERTA INTELIGENTE: Solo si el servidor dice que bajó del mínimo
-              if (upd.alertaStockBajo && !avisosDados.has(upd.insumoId)) {
-                alert(`⚠️ STOCK MÍNIMO: El insumo "${upd.nombreInsumo}" llegó a ${upd.nuevoStock}.`);
-                avisosDados.add(upd.insumoId);
-              }
-            });
-            window.dispatchEvent(new Event('inventarioActualizado'));
-          } else if (res.status === 409) {
-            alert(`🚫 AGOTADO: ${data.insumo || 'Ingrediente'} insuficiente en cocina.`);
-          }
-        })
-        .catch(err => console.error("🔥 Error de red:", err));
-      }
     }
-  };
+  }, []);
   const setCartFromOrden = (platosOrdenados = [], tipoDeSanity = 'mesa') => {
     // 🧹 Limpiamos el rastro del localStorage antes de cargar lo nuevo
     localStorage.removeItem('talanquera_cart');
@@ -204,56 +196,21 @@ export function CartProvider({ children }) {
     setItems(reconstruido);
   };
 
- const decrease = async (lineId) => {
-  const itemADisminuir = items.find(i => i.lineId === lineId);
-  if (!itemADisminuir) return;
-
-  // 1. Identificamos si tiene receta nueva o insumo antiguo
-  const tieneReceta = Array.isArray(itemADisminuir.recetaInsumos) && itemADisminuir.recetaInsumos.length > 0;
-  const insumoIdLegacy = itemADisminuir.insumoVinculado?._ref || itemADisminuir.insumoId;
-
-  if (itemADisminuir.controlaInventario) {
-    // 🛡️ Preparamos el array de items para devolver de forma atómica
-    let itemsParaDevolver = [];
-
-    if (tieneReceta) {
-      // CASO NUEVO: Arroz Caribeño (Verdura + Camarón)
-      itemsParaDevolver = itemADisminuir.recetaInsumos.map(r => ({
-        insumoId: r.insumoId,
-        cantidad: Number(r.cantidad) || 1
-      }));
-    } else if (insumoIdLegacy) {
-      // CASO ANTIGUO: Insumo único
-      itemsParaDevolver = [{
-        insumoId: insumoIdLegacy,
-        cantidad: Number(itemADisminuir.cantidadADescontar) || 1
-      }];
-    }
-
-    // 🚀 Disparamos la devolución solo si hay algo que devolver
-    if (itemsParaDevolver.length > 0) {
-      fetch('/api/inventario/devolver', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ items: itemsParaDevolver })
-      })
-      .then(res => {
-        if (res.ok) {
-          window.dispatchEvent(new Event('inventarioActualizado'));
-        }
-      })
-      .catch(err => console.error("Error al devolver stock:", err));
-    }
-  }
-
-  // --- Lógica de UI (Se mantiene EXACTAMENTE igual a tu original) ---
+ const decrease = React.useCallback((lineId) => {
+  // Entramos directo al set para que la actualización sea atómica en React
   setItems(prev => {
     const idx = prev.findIndex(i => i.lineId === lineId);
-    if (idx === -1) return prev;
+    if (idx === -1) return prev; // Si no lo encuentra, no hace nada
+
     const copy = [...prev];
+    
+    // Si solo hay uno, eliminamos la línea completa del carrito
     if (copy[idx].cantidad <= 1) {
       return prev.filter(i => i.lineId !== lineId);
-    } else {
+    } 
+    
+    // Si hay más de uno, restamos 1 y recalculamos el subtotal de esa línea
+    else {
       const nuevaCant = copy[idx].cantidad - 1;
       copy[idx] = { 
         ...copy[idx], 
@@ -263,9 +220,9 @@ export function CartProvider({ children }) {
       return copy;
     }
   });
-};
+}, []);
 
-const clear = () => {
+const clear = React.useCallback(() => {
     setItems([]);
     setPropina(0);
     setMontoManual(0);
@@ -275,67 +232,23 @@ const clear = () => {
     localStorage.removeItem('talanquera_cart');
     localStorage.removeItem('talanquera_mesa');
     localStorage.removeItem('talanquera_tipo_orden');
-  };
-  const clearWithStockReturn = async () => {
-    const itemsParaDevolver = [];
-    
-    items.forEach(it => {
-        if (it.controlaInventario) {
-            const receta = it.recetaInsumos || (it.insumoVinculado?._ref ? [{ insumoId: it.insumoVinculado._ref, cantidad: Number(it.cantidadADescontar) || 1 }] : []);
-            receta.forEach(r => {
-                itemsParaDevolver.push({
-                    insumoId: r.insumoId,
-                    cantidad: r.cantidad * it.cantidad
-                });
-            });
-        }
-    });
-
-    if (itemsParaDevolver.length > 0) {
-        try {
-            const res = await fetch('/api/inventario/devolver', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ items: itemsParaDevolver })
-            });
-            if (res.ok) {
-                refreshStockLocal();
-                window.dispatchEvent(new Event('inventarioActualizado'));
-            }
-        } catch (e) { console.error(e); }
-    }
+  }, []);
+  const clearWithStockReturn = React.useCallback(async () =>{
+    // 🛡️ Lupa Senior: Como ahora no descontamos al agregar, 
+    // "limpiar con devolución" es simplemente limpiar el carrito local.
     clear(); 
-};
+  }, [clear]);
 
-const eliminarLineaConStock = async (lineId) => {
-    const it = items.find(it => it.lineId === lineId);
-    if (!it) return items;
-
-    const nuevoCarrito = items.filter(it => it.lineId !== lineId);
-
-    if (it.controlaInventario) {
-        // 🛡️ RECOLECTOR DE RECETA (Soporta nuevo y viejo)
-        const receta = it.recetaInsumos || (it.insumoVinculado?._ref ? [{ insumoId: it.insumoVinculado._ref, cantidad: Number(it.cantidadADescontar) || 1 }] : []);
-        
-        if (receta.length > 0) {
-            const aDevolver = receta.map(r => ({
-                insumoId: r.insumoId,
-                cantidad: r.cantidad * it.cantidad // Multiplicamos por los platos en la línea
-            }));
-
-            try {
-                await fetch('/api/inventario/devolver', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ items: aDevolver })
-                });
-                window.dispatchEvent(new Event('inventarioActualizado'));
-            } catch (err) { console.error(err); }
+const eliminarLineaConStock = React.useCallback((lineId) => {
+ setItems(prev => {
+        const nuevoCarrito = prev.filter(it => it.lineId !== lineId);
+        if (nuevoCarrito.length === 0) {
+            localStorage.removeItem('talanquera_cart');
         }
-    }
-    setItems(nuevoCarrito);
-    return nuevoCarrito; 
-};
+        
+        return nuevoCarrito;
+    });
+}, []);
 // 🚀 BISTURÍ: Esta función limpia la memoria de stock para forzar recarga
   const refreshStockLocal = () => {
     stockLocalCache.clear();
@@ -388,10 +301,9 @@ const eliminarLineaConStock = async (lineId) => {
       cleanPrice: cleanPrice,
      refreshStockLocal 
       }), [
-      items, tipoOrden, ordenActivaId, total, metodoPago, propina, montoManual, eliminarLineaConStock, refreshStockLocal
-      ]);
-
-  return (
+      items, tipoOrden, ordenActivaId, total, metodoPago, propina, montoManual, eliminarLineaConStock, refreshStockLocal, addProduct, decrease, clear, clearWithStockReturn]);
+      
+return (
     <CartContext.Provider value={contextValue}>
       {children}
     </CartContext.Provider>
